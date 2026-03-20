@@ -1,0 +1,51 @@
+{
+  "name": "claude-chat-app",
+  "version": "2.0.0",
+  "description": "Conversational AI Chat App - Beautiful markdown rendering for Claude",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win",
+    "build:portable": "electron-builder --win portable"
+  },
+  "keywords": ["chat", "claude", "electron", "ai"],
+  "author": "JGKim",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "dependencies": {
+    "marked": "^15.0.0",
+    "highlight.js": "^11.11.0"
+  },
+  "build": {
+    "appId": "com.jgkim.claude-chat",
+    "productName": "Claude Chat",
+    "npmRebuild": false,
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**/*",
+      "node_modules/**/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Claude Chat"
+    }
+  }
+}

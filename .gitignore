@@ -1,0 +1,7 @@
+node_modules/
+dist/
+dist2/
+build_out/
+dist-temp/
+*.exe
+*.blockmap
