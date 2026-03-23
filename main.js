@@ -20,6 +20,11 @@ const ARCHIVE_EXTENSIONS = new Set(['.zip', '.tar', '.gz', '.7z', '.rar', '.bz2'
 
 // 마지막으로 수신한 rate limit 정보 캐시
 let lastRateLimitInfo = null;
+// 세션 누적 사용량 (비용, 토큰)
+let sessionUsage = { totalCostUsd: 0, totalTokens: 0, inputTokens: 0, outputTokens: 0, cacheRead: 0, cacheCreate: 0, turnCount: 0 };
+// PTY 기반 /usage 캐시
+let cachedUsageData = null;
+let usageFetchInProgress = false;
 
 // 최소한의 ANSI 제거 (edge case용)
 function stripAnsi(text) {
@@ -585,11 +590,13 @@ function formatCliArgsForLog(args, maxLen = 160) {
 // Claude stream-json 이벤트 처리
 function handleClaudeStreamEvent(id, evt) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
+  const send = (data) => mainWindow.webContents.send('cli:stream', { id, ...data });
 
+  // 시스템 초기화
   if (evt.type === 'system' && evt.subtype === 'init') {
-    mainWindow.webContents.send('cli:stream', {
-      id,
+    send({
       type: 'system-init',
+      chunk: JSON.stringify({ sessionId: evt.session_id, model: evt.model, tools: evt.tools }),
       sessionId: evt.session_id,
       model: evt.model,
       tools: evt.tools,
@@ -597,76 +604,79 @@ function handleClaudeStreamEvent(id, evt) {
     return;
   }
 
+  // 어시스턴트 응답 (thinking, text, tool_use 블록 포함)
   if (evt.type === 'assistant') {
     const msg = evt.message;
     if (!msg || !msg.content) return;
 
     for (const block of msg.content) {
       if (block.type === 'text' && block.text) {
-        mainWindow.webContents.send('cli:stream', {
-          id,
-          type: 'stdout',
-          chunk: block.text,
-        });
+        send({ type: 'stdout', chunk: block.text });
       } else if (block.type === 'thinking' && block.thinking) {
-        mainWindow.webContents.send('cli:stream', {
-          id,
-          type: 'thinking',
-          chunk: block.thinking,
-        });
+        send({ type: 'thinking', chunk: block.thinking });
       } else if (block.type === 'tool_use') {
-        mainWindow.webContents.send('cli:stream', {
-          id,
-          type: 'tool-use',
-          toolName: block.name,
-          toolInput: block.input,
-          toolId: block.id,
-        });
+        const toolSummary = `${block.name}(${JSON.stringify(block.input).slice(0, 200)})`;
+        send({ type: 'tool-use', chunk: toolSummary, toolName: block.name, toolInput: block.input, toolId: block.id });
       }
     }
 
-    // Send usage info if available
     if (msg.usage) {
-      mainWindow.webContents.send('cli:stream', {
-        id,
-        type: 'usage',
-        usage: msg.usage,
-      });
+      send({ type: 'usage', chunk: JSON.stringify(msg.usage), usage: msg.usage });
     }
     return;
   }
 
-  if (evt.type === 'tool_result') {
-    mainWindow.webContents.send('cli:stream', {
-      id,
-      type: 'tool-result',
-      toolId: evt.tool_use_id,
-      content: evt.content,
-    });
+  // 유저 메시지 (tool_result 포함)
+  if (evt.type === 'user') {
+    const msg = evt.message;
+    if (!msg || !msg.content) return;
+    const contents = Array.isArray(msg.content) ? msg.content : [msg.content];
+    for (const block of contents) {
+      if (block.type === 'tool_result') {
+        const resultStr = typeof block.content === 'string' ? block.content : JSON.stringify(block.content || '');
+        send({ type: 'tool-result', chunk: resultStr.slice(0, 500), toolId: block.tool_use_id, content: block.content });
+      }
+    }
     return;
   }
 
+  // tool_result (최상위 레벨)
+  if (evt.type === 'tool_result') {
+    const resultStr = typeof evt.content === 'string' ? evt.content : JSON.stringify(evt.content || '');
+    send({ type: 'tool-result', chunk: resultStr.slice(0, 500), toolId: evt.tool_use_id, content: evt.content });
+    return;
+  }
+
+  // Rate limit
   if (evt.type === 'rate_limit_event') {
     lastRateLimitInfo = evt.rate_limit_info;
-    mainWindow.webContents.send('cli:stream', {
-      id,
-      type: 'rate-limit',
-      rateLimitInfo: evt.rate_limit_info,
-    });
+    send({ type: 'rate-limit', chunk: JSON.stringify(evt.rate_limit_info), rateLimitInfo: evt.rate_limit_info });
     return;
   }
 
+  // 최종 결과
   if (evt.type === 'result') {
-    mainWindow.webContents.send('cli:stream', {
-      id,
+    // 세션 누적 사용량 업데이트
+    if (evt.total_cost_usd) sessionUsage.totalCostUsd += Number(evt.total_cost_usd) || 0;
+    if (evt.usage) {
+      sessionUsage.inputTokens += Number(evt.usage.input_tokens) || 0;
+      sessionUsage.outputTokens += Number(evt.usage.output_tokens) || 0;
+      sessionUsage.cacheRead += Number(evt.usage.cache_read_input_tokens) || 0;
+      sessionUsage.cacheCreate += Number(evt.usage.cache_creation_input_tokens) || 0;
+      sessionUsage.totalTokens = sessionUsage.inputTokens + sessionUsage.outputTokens + sessionUsage.cacheRead + sessionUsage.cacheCreate;
+    }
+    sessionUsage.turnCount++;
+    send({
       type: 'result',
+      chunk: JSON.stringify({ cost_usd: evt.total_cost_usd, session_id: evt.session_id, duration_ms: evt.duration_ms }),
       result: evt.result,
       cost: evt.total_cost_usd,
       duration: evt.duration_ms,
       usage: evt.usage,
+      modelUsage: evt.modelUsage,
+      sessionUsage: { ...sessionUsage },
       sessionId: evt.session_id,
     });
-    // Also send turnDone
     mainWindow.webContents.send('cli:turnDone', { id });
     return;
   }
@@ -679,7 +689,7 @@ ipcMain.handle('cli:run', (event, { id, profile, prompt, cwd }) => {
   const baseArgs = [...(profile.args || [])];
 
   // Build claude args
-  const args = ['-p', '--output-format', 'stream-json', '--verbose', ...baseArgs];
+  const args = ['-p', '--verbose', ...baseArgs];
   if (promptText) {
     args.push('--', promptText);
   }
@@ -699,6 +709,9 @@ ipcMain.handle('cli:run', (event, { id, profile, prompt, cwd }) => {
     });
 
     runningProcesses.set(id, createProcessHandle('spawn', child));
+
+    // stdin을 즉시 닫아 "no stdin data received" 경고 방지
+    child.stdin?.end();
 
     let lineBuf = '';
 
@@ -924,7 +937,7 @@ ${detailDiff}`;
     if (!claudePath) return { success: false, error: 'claude CLI not found' };
 
     return new Promise((resolve) => {
-      const execArgs = ['-p', '--output-format', 'json', '--verbose', '--model', 'haiku', '--', prompt];
+      const execArgs = ['-p', '--output-format', 'json', '--model', 'haiku', '--', prompt];
 
       const spawnOptions = {
         cwd: repoRoot,
@@ -945,9 +958,14 @@ ${detailDiff}`;
         // JSON 결과 파싱 → result 필드 추출
         let message = '';
         try {
-          const obj = JSON.parse(stdout.trim());
-          if (obj?.result) {
-            message = obj.result.trim();
+          const parsed = JSON.parse(stdout.trim());
+          // 배열인 경우 (--verbose 등) 마지막에서 result 찾기
+          if (Array.isArray(parsed)) {
+            for (let i = parsed.length - 1; i >= 0; i--) {
+              if (parsed[i]?.result) { message = parsed[i].result.trim(); break; }
+            }
+          } else if (parsed?.result) {
+            message = parsed.result.trim();
           }
         } catch {
           // JSONL 형태일 수 있으므로 마지막 줄 시도
@@ -1189,17 +1207,118 @@ ipcMain.handle('help:openManual', () => {
   }
 });
 
-// --- Claude rate limits (스트림에서 수신한 캐시 반환) ---
-ipcMain.handle('codex:rateLimits', async () => {
-  if (lastRateLimitInfo) {
-    return {
-      success: true,
-      rateLimitType: lastRateLimitInfo.rateLimitType,
-      status: lastRateLimitInfo.status,
-      resetsAt: lastRateLimitInfo.resetsAt,
-    };
+// --- PTY 기반 /usage 데이터 가져오기 ---
+function fetchUsageViaPty() {
+  if (usageFetchInProgress) {
+    return Promise.resolve(cachedUsageData);
   }
-  return { success: false, error: 'no rate limit data yet' };
+  usageFetchInProgress = true;
+  return new Promise((resolve) => {
+    let pty;
+    try {
+      pty = require('@lydell/node-pty');
+    } catch (e) {
+      usageFetchInProgress = false;
+      resolve(null);
+      return;
+    }
+    const claudePath = resolveCliPath('claude');
+    if (!claudePath) {
+      usageFetchInProgress = false;
+      resolve(null);
+      return;
+    }
+    let output = '';
+    let shell;
+    let resolved = false;
+    const finish = () => {
+      if (resolved) return;
+      resolved = true;
+      usageFetchInProgress = false;
+      try { shell.kill(); } catch (_) {}
+      // ANSI 제거 후 파싱 - [nC 커서 이동은 공백으로 치환
+      const clean = output
+        .replace(/\x1b\[\d*C/g, ' ')
+        .replace(/\x1b\[[0-9;]*[a-zA-ZH]/g, '')
+        .replace(/\x1b\][^\x07]*\x07/g, '')
+        .replace(/\x1b\[\?[0-9;]*[hl]/g, '')
+        .replace(/\x1b[>=>\[>][0-9]*[a-zA-Z]?/g, '')
+        .replace(/\x1b\([A-Z0-9]/g, '');
+      const result = parseUsageText(clean);
+      if (result) cachedUsageData = result;
+      resolve(cachedUsageData);
+    };
+    try {
+      shell = pty.spawn(claudePath, [], {
+        name: 'xterm', cols: 120, rows: 30,
+        cwd: workingDirectory || process.cwd(),
+        env: process.env,
+      });
+      shell.onData(d => { output += d; });
+      // 6초 후 /usage 전송
+      setTimeout(() => { try { shell.write('/usage\r'); } catch (_) {} }, 5000);
+      // usage 데이터 감지
+      const checkInterval = setInterval(() => {
+        if (output.includes('% used') && (output.includes('Extra usage') || output.includes('Current week'))) {
+          clearInterval(checkInterval);
+          setTimeout(finish, 2000);
+        }
+      }, 300);
+      // 최대 20초 타임아웃
+      setTimeout(() => { clearInterval(checkInterval); finish(); }, 20000);
+    } catch (e) {
+      usageFetchInProgress = false;
+      resolve(null);
+    }
+  });
+}
+
+function parseUsageText(text) {
+  const result = {};
+  // 섹션별로 분리: "Current session", "Current week (all models)", "Current week (Sonnet only)", "Extra usage"
+  const sections = text.split(/(Current session|Current week \(all models\)|Current week \(Sonnet only\)|Extra usage)/i);
+  for (let i = 1; i < sections.length; i += 2) {
+    const header = sections[i];
+    const body = sections[i + 1] || '';
+    const pctMatch = body.match(/(\d+)%\s*used/);
+    const resetMatch = body.match(/Resets?\s+(.*?\(.*?\))/i);
+    if (header.match(/Current session/i)) {
+      if (pctMatch) result.sessionPercent = parseInt(pctMatch[1]);
+      if (resetMatch) result.sessionResetsAt = resetMatch[1].trim();
+    } else if (header.match(/Current week \(all models\)/i)) {
+      if (pctMatch) result.weekAllPercent = parseInt(pctMatch[1]);
+      if (resetMatch) result.weekAllResetsAt = resetMatch[1].trim();
+    } else if (header.match(/Current week \(Sonnet only\)/i)) {
+      if (pctMatch) result.weekSonnetPercent = parseInt(pctMatch[1]);
+      if (resetMatch) result.weekSonnetResetsAt = resetMatch[1].trim();
+    } else if (header.match(/Extra usage/i)) {
+      if (body.includes('not enabled')) result.extraUsage = 'not_enabled';
+    }
+  }
+
+  if (Object.keys(result).length === 0) return null;
+  result.fetchedAt = Date.now();
+  return result;
+}
+
+// --- Claude rate limits (스트림에서 수신한 캐시 + PTY usage) ---
+ipcMain.handle('codex:rateLimits', async () => {
+  const resetsAtMs = lastRateLimitInfo?.resetsAt
+    ? (lastRateLimitInfo.resetsAt > 1e12 ? lastRateLimitInfo.resetsAt : lastRateLimitInfo.resetsAt * 1000)
+    : null;
+  // PTY usage 캐시가 없거나 5분 이상 지났으면 갱신
+  const stale = !cachedUsageData || (Date.now() - (cachedUsageData.fetchedAt || 0)) > 5 * 60 * 1000;
+  if (stale) {
+    await fetchUsageViaPty(); // 캐시 없으면 대기
+  }
+  return {
+    success: true,
+    rateLimitType: lastRateLimitInfo?.rateLimitType || 'five_hour',
+    status: lastRateLimitInfo?.status || 'unknown',
+    h5ResetsAt: resetsAtMs,
+    sessionUsage: { ...sessionUsage },
+    usageData: cachedUsageData ? { ...cachedUsageData } : null,
+  };
 });
 
 // --- 서브에이전트: .claude/agents/*.md 파일 읽기 ---

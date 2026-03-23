@@ -34,6 +34,7 @@
             : (actualCodeDiffs.length > 0
               ? (Number.isFinite(Number(msg.timestamp)) ? Number(msg.timestamp) : Date.now())
               : 0);
+          const claudeEvents = Array.isArray(msg.claudeEvents) ? msg.claudeEvents : undefined;
           return {
             id: typeof msg.id === 'string' && msg.id ? msg.id : `msg_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`,
             role: msg.role === 'user' || msg.role === 'error' ? msg.role : 'ai',
@@ -42,6 +43,7 @@
             timestamp: Number.isFinite(Number(msg.timestamp)) ? Number(msg.timestamp) : Date.now(),
             actualCodeDiffs,
             actualCodeDiffsFetchedAt,
+            ...(claudeEvents ? { claudeEvents } : {}),
           };
         });
       const cwd = typeof item.cwd === 'string' ? item.cwd : '';
@@ -787,12 +789,12 @@
     { command: '/logout', description: '인증 정보 제거', usage: '/logout' },
     // --- 설정 ---
     { command: '/model', description: '모델 변경', usage: '/model [모델명]' },
-    { command: '/reasoning', description: 'Reasoning effort 변경', usage: '/reasoning [low|medium|high|extra high]' },
+    { command: '/reasoning', description: 'Reasoning effort 변경', usage: '/reasoning [low|medium|high|max]' },
     { command: '/sandbox', description: '샌드박스 모드 변경', usage: '/sandbox [read-only|workspace-write|danger-full-access]' },
     { command: '/cwd', description: '작업 폴더 변경', usage: '/cwd [경로]' },
     // --- 앱 기능 ---
     { command: '/file', description: '파일 불러오기', usage: '/file [경로]' },
-    { command: '/status', description: '5h/weekly limit 갱신', usage: '/status' },
+    { command: '/usage', description: '5h/weekly 사용량 갱신', usage: '/usage' },
     { command: '/clear', description: '현재 대화 초기화', usage: '/clear' },
     { command: '/compress', description: '현재 대화 컨텍스트 압축', usage: '/compress' },
     { command: '/concise', description: '간결 모드 토글 (토큰 절약)', usage: '/concise [on|off]' },
@@ -815,7 +817,7 @@
     { id: 'claude-haiku-4-5', cliModel: 'claude-haiku-4-5-20251001' },
   ];
   const MODEL_OPTION_IDS = MODEL_OPTIONS.map(item => item.id);
-  const REASONING_OPTIONS = ['low', 'medium', 'high'];
+  const REASONING_OPTIONS = ['low', 'medium', 'high', 'max'];
   const DEFAULT_MODEL_ID = 'sonnet';
   const DEFAULT_REASONING = 'high';
   const RUNTIME_INFO_VERSION = 3;
@@ -861,12 +863,14 @@
   const claudeExecutionMode = 'exec';
   let sandboxMode = localStorage.getItem('claudeSandboxMode') || 'workspace-write';
   let subagentAutoClose = localStorage.getItem('subagentAutoClose') === 'true';
-  const APPROVAL_POLICY_OPTIONS = ['default', 'acceptEdits', 'bypassPermissions', 'plan'];
+  const APPROVAL_POLICY_OPTIONS = ['default', 'acceptEdits', 'auto', 'bypassPermissions', 'plan', 'dontAsk'];
   const APPROVAL_POLICY_LABELS = {
     'default': '기본 (확인 후 실행)',
     'acceptEdits': '편집 자동 승인',
+    'auto': '자동 (안전한 작업 자동 승인)',
     'bypassPermissions': '전체 자동 승인',
     'plan': '계획만 (실행 안함)',
+    'dontAsk': '묻지 않기',
   };
   function normalizeApprovalPolicy(value) {
     const normalized = String(value || '').trim();
@@ -874,7 +878,9 @@
     const lower = normalized.toLowerCase();
     if (lower === 'auto-approve' || lower === 'bypasspermissions') return 'bypassPermissions';
     if (lower === 'acceptedits') return 'acceptEdits';
+    if (lower === 'auto') return 'auto';
     if (lower === 'plan') return 'plan';
+    if (lower === 'dontask') return 'dontAsk';
     return 'default';
   }
   let approvalPolicy = normalizeApprovalPolicy(localStorage.getItem('claudeApprovalPolicy'));
@@ -1591,20 +1597,17 @@
   function renderClaudeStatusbar() {
     if (!$claudeStatusbar) return;
 
-    const h5Pct = normalizePercent(claudeLimitSnapshot.h5);
-    const weeklyPct = normalizePercent(claudeLimitSnapshot.weekly);
-    const h5Level = getRemainingLevel(h5Pct);
-    const weeklyLevel = getRemainingLevel(weeklyPct);
     const updatedAtText = claudeLimitSnapshot.updatedAt
       ? new Date(claudeLimitSnapshot.updatedAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
       : '-';
 
-    const buildUsageItem = (label, pct, level, resetAt) => {
-      const safePct = pct === null ? 100 : Math.max(0, Math.min(100, pct));
+    // usedPct: 사용한 퍼센트 (0~100), 바가 채워지는 양
+    const buildUsageItem = (label, usedPct, level, resetAt, detail) => {
+      const safePct = usedPct === null ? 0 : Math.max(0, Math.min(100, usedPct));
       const fillClass = level === 'danger'
         ? 'danger'
         : (level === 'warn' ? 'warn' : (level === 'unknown' ? 'unknown' : ''));
-      const pctText = pct === null ? '--' : `${formatRemainingPercent(pct)} 남음`;
+      const pctText = usedPct === null ? '--' : `${safePct}% 사용`;
       const resetText = formatResetEta(resetAt);
       return `<div class="claude-usage-item">
         <div class="claude-usage-main">
@@ -1614,43 +1617,68 @@
           </div>
           <span class="claude-usage-pct">${pctText}</span>
         </div>
-        <span class="claude-usage-reset">${resetText}</span>
+        <span class="claude-usage-reset">${detail || resetText}</span>
       </div>`;
     };
 
-    // token 정보가 있으면 context window 사용률 표시
-    const tokenInfo = claudeLimitSnapshot.tokenInfo;
-    const hasTokenInfo = tokenInfo && Number.isFinite(tokenInfo.contextWindow) && tokenInfo.contextWindow > 0;
+    let rows = '';
 
-    let tokenRow = '';
-    if (hasTokenInfo) {
-      const ctxUsedPct = Math.min(100, (tokenInfo.totalTokens / tokenInfo.contextWindow) * 100);
-      const ctxLevel = ctxUsedPct >= 90 ? 'danger' : (ctxUsedPct >= 70 ? 'warn' : '');
-      const ctxRemaining = Math.max(0, 100 - ctxUsedPct);
-      tokenRow = `<div class="claude-usage-item">
+    // 세션 누적 사용량 표시
+    const su = claudeLimitSnapshot.sessionUsage;
+    if (su && su.turnCount > 0) {
+      const totalTokens = su.totalTokens || 0;
+      const costText = su.totalCostUsd > 0 ? `$${su.totalCostUsd.toFixed(4)}` : '';
+      const resetText = formatResetEta(claudeLimitSnapshot.h5ResetAt);
+      rows += `<div class="claude-usage-item">
         <div class="claude-usage-main">
-          <span class="claude-usage-label">Context</span>
-          <div class="claude-usage-bar">
-            <div class="claude-usage-fill ${ctxLevel}" style="width:${ctxRemaining}%"></div>
-          </div>
-          <span class="claude-usage-pct">${formatTokenCount(tokenInfo.totalTokens)} / ${formatTokenCount(tokenInfo.contextWindow)}</span>
+          <span class="claude-usage-label">Session</span>
+          <span class="claude-usage-pct">${formatTokenCount(totalTokens)} tokens · ${su.turnCount}턴${costText ? ' · ' + costText : ''}</span>
         </div>
-        <span class="claude-usage-reset">in ${formatTokenCount(tokenInfo.inputTokens)} · out ${formatTokenCount(tokenInfo.outputTokens)}</span>
+        <span class="claude-usage-reset">in ${formatTokenCount(su.inputTokens + su.cacheRead + su.cacheCreate)} · out ${formatTokenCount(su.outputTokens)}${resetText ? ' · ' + resetText : ''}</span>
       </div>`;
     }
 
-    // rate limit 정보가 있으면 기존 표시, 없으면 token 정보만
-    const hasRateLimits = h5Pct !== null || weeklyPct !== null;
-    let rateLimitRow = '';
-    if (hasRateLimits) {
-      rateLimitRow = `${buildUsageItem('5h', h5Pct, h5Level, claudeLimitSnapshot.h5ResetAt)}
-        ${buildUsageItem('Week', weeklyPct, weeklyLevel, claudeLimitSnapshot.weeklyResetAt)}`;
+    // PTY에서 가져온 실제 usage 데이터 표시 (5시간 + Week)
+    const ud = claudeLimitSnapshot.usageData;
+    if (ud) {
+      if (ud.sessionPercent != null) {
+        const sesLevel = ud.sessionPercent >= 80 ? 'danger' : (ud.sessionPercent >= 60 ? 'warn' : '');
+        rows += buildUsageItem('5시간', ud.sessionPercent, sesLevel, null, ud.sessionResetsAt ? `리셋: ${ud.sessionResetsAt}` : '');
+      }
+      if (ud.weekAllPercent != null) {
+        const weekLevel = ud.weekAllPercent >= 80 ? 'danger' : (ud.weekAllPercent >= 60 ? 'warn' : '');
+        rows += buildUsageItem('Week', ud.weekAllPercent, weekLevel, null, ud.weekAllResetsAt ? `리셋: ${ud.weekAllResetsAt}` : '');
+      }
+    } else {
+      // 폴백: 리셋 시간 기반 경과율
+      const h5ResetAt = claudeLimitSnapshot.h5ResetAt;
+      if (h5ResetAt) {
+        const FIVE_HOURS_MS = 5 * 60 * 60 * 1000;
+        const windowStart = h5ResetAt - FIVE_HOURS_MS;
+        const now = Date.now();
+        const elapsed = Math.max(0, now - windowStart);
+        const elapsedPct = Math.min(100, (elapsed / FIVE_HOURS_MS) * 100);
+        const level = elapsedPct >= 80 ? 'danger' : (elapsedPct >= 60 ? 'warn' : '');
+        rows += buildUsageItem('5시간', Math.round(elapsedPct), level, h5ResetAt);
+      }
     }
 
-    $claudeStatusbar.innerHTML = `<div class="claude-usage-row">
-      ${rateLimitRow}${tokenRow}
-    </div>
-    <div class="claude-usage-note">${hasRateLimits ? '5h / weekly limit' : 'context window usage'} · 마지막 갱신 ${updatedAtText}</div>`;
+    // token 정보 (마지막 턴의 context window 사용률)
+    const tokenInfo = claudeLimitSnapshot.tokenInfo;
+    const hasTokenInfo = tokenInfo && Number.isFinite(tokenInfo.contextWindow) && tokenInfo.contextWindow > 0;
+    if (hasTokenInfo) {
+      const ctxUsedPct = Math.min(100, Math.round((tokenInfo.totalTokens / tokenInfo.contextWindow) * 100));
+      const ctxLevel = ctxUsedPct >= 90 ? 'danger' : (ctxUsedPct >= 70 ? 'warn' : '');
+      rows += buildUsageItem('Context', ctxUsedPct, ctxLevel, null,
+        `${formatTokenCount(tokenInfo.totalTokens)} / ${formatTokenCount(tokenInfo.contextWindow)}`);
+    }
+
+    if (!rows) {
+      rows = `<div class="claude-usage-item"><div class="claude-usage-main"><span class="claude-usage-pct">질문을 보내면 사용량이 표시됩니다</span></div></div>`;
+    }
+
+    $claudeStatusbar.innerHTML = `<div class="claude-usage-row">${rows}</div>
+    <div class="claude-usage-note">사용량 · 마지막 갱신 ${updatedAtText}</div>`;
   }
 
   function parseEffort(sections) {
@@ -2017,8 +2045,10 @@
     const normalized = String(policy || '').trim();
     if (!normalized || normalized === 'default') return 'default';
     if (normalized === 'acceptEdits') return 'acceptEdits';
+    if (normalized === 'auto') return 'auto';
     if (normalized === 'bypassPermissions') return 'bypassPermissions';
     if (normalized === 'plan') return 'plan';
+    if (normalized === 'dontAsk') return 'dontAsk';
     return 'default';
   }
 
@@ -2040,7 +2070,7 @@
 
     // Reasoning effort (Claude CLI uses --effort)
     const effort = normalizeReasoning(claudeRuntimeInfo.reasoning);
-    if (effort === 'low' || effort === 'medium' || effort === 'high') {
+    if (effort === 'low' || effort === 'medium' || effort === 'high' || effort === 'max') {
       args.push('--effort', effort);
     } else {
       args.push('--effort', 'high');
@@ -2952,15 +2982,15 @@
     const command = (commandMatch?.[1] || '').toLowerCase();
     const argText = (commandMatch?.[2] || '').trim();
 
-    if (command === '/status') {
+    if (command === '/usage') {
       showSlashFeedback('Claude 사용량 상태를 갱신 중입니다...', false);
       const refreshed = await refreshClaudeRateLimits('slash');
       if (refreshed?.skipped) {
         showSlashFeedback('최근 10분 내 갱신되어 상태를 유지했습니다.', false);
       } else if (refreshed?.success) {
-        showSlashFeedback('5h/weekly limit 상태를 갱신했습니다.', false);
+        showSlashFeedback('5h/weekly 사용량 상태를 갱신했습니다.', false);
       } else {
-        showSlashFeedback('상태 갱신에 실패하여 기존 값을 유지합니다.', true);
+        showSlashFeedback('사용량 데이터가 아직 없습니다. 질문을 보낸 후 다시 시도해주세요.', true);
       }
       return true;
     }
@@ -7646,7 +7676,11 @@ ${userPrompt}
       .filter(Boolean)
       .slice(-st.maxLines);
 
-    if (candidates.length === 0) {
+    // Claude CLI 이벤트 라인([thinking], [tool], [result])을 기존 lines에서 보존
+    const eventLineRe = /^\[(thinking|tool|result)\]\s/;
+    const existingEventLines = st.lines.filter(l => eventLineRe.test(l));
+
+    if (candidates.length === 0 && existingEventLines.length === 0) {
       const fallbacks = buildPendingThinkingUpdates(fullOutputText)
         .slice(0, st.maxLines)
         .map(line => normalizeDetailLine(line))
@@ -7659,9 +7693,19 @@ ${userPrompt}
       return st.lines.slice();
     }
 
-    const signature = candidates.join('\n');
+    // 이벤트 라인과 일반 candidates를 병합
+    const merged = [];
+    const candidateSet = new Set(candidates);
+    // 기존 이벤트 라인 중 candidates에 없는 것 추가
+    for (const el of existingEventLines) {
+      if (!candidateSet.has(el)) merged.push(el);
+    }
+    merged.push(...candidates);
+    const final = merged.slice(-st.maxLines);
+
+    const signature = final.join('\n');
     if (signature !== st.lastSignature) {
-      st.lines = candidates;
+      st.lines = final;
       st.lastSignature = signature;
     }
 
@@ -8987,27 +9031,23 @@ ${userPrompt}
     try {
       const result = await window.electronAPI.claude.rateLimits();
       if (result?.success) {
-        const h5RemainingRaw = normalizePercent(result.h5Remaining);
-        const weeklyRemainingRaw = normalizePercent(result.weeklyRemaining);
-        const h5Used = normalizePercent(result.h5Used);
-        const weeklyUsed = normalizePercent(result.weeklyUsed);
-        const h5Remaining = h5RemainingRaw != null
-          ? h5RemainingRaw
-          : (h5Used != null ? normalizePercent(100 - h5Used) : null);
-        const weeklyRemaining = weeklyRemainingRaw != null
-          ? weeklyRemainingRaw
-          : (weeklyUsed != null ? normalizePercent(100 - weeklyUsed) : null);
+        const snapshot = {};
+
+        // Claude CLI rate_limit_event: resetsAt, status, rateLimitType
         const h5ResetAt = normalizeResetTimestamp(result.h5ResetsAt);
-        const weeklyResetAt = normalizeResetTimestamp(result.weeklyResetsAt);
-        const h5WindowMin = Number(result.h5Window);
-        const weeklyWindowMin = Number(result.weeklyWindow);
-        mergeClaudeLimitSnapshot({
-          h5: h5Remaining,
-          weekly: weeklyRemaining,
-          h5ResetAt: h5ResetAt || (Number.isFinite(h5WindowMin) && h5WindowMin > 0 ? Date.now() + h5WindowMin * 60000 : null),
-          weeklyResetAt: weeklyResetAt || (Number.isFinite(weeklyWindowMin) && weeklyWindowMin > 0 ? Date.now() + weeklyWindowMin * 60000 : null),
-          updatedAt: Date.now(),
-        });
+        if (h5ResetAt) snapshot.h5ResetAt = h5ResetAt;
+
+        // 세션 누적 사용량 저장
+        if (result.sessionUsage) {
+          claudeLimitSnapshot.sessionUsage = result.sessionUsage;
+        }
+        // PTY에서 가져온 실제 usage 데이터
+        if (result.usageData) {
+          claudeLimitSnapshot.usageData = result.usageData;
+        }
+
+        snapshot.updatedAt = Date.now();
+        mergeClaudeLimitSnapshot(snapshot);
         renderClaudeStatusbar();
         return { success: true, skipped: false };
       }
@@ -9029,6 +9069,54 @@ ${userPrompt}
     return { currentTab };
   }
 
+  function renderClaudeEventsPanel(events) {
+    if (!Array.isArray(events) || events.length === 0) return '';
+    const items = events.map((ev, i) => {
+      const idx = i + 1;
+      if (ev.type === 'thinking') {
+        const text = escapeHtmlLite(ev.text || '');
+        const summary = escapeHtmlLite((ev.text || '').split('\n')[0].slice(0, 120));
+        return `<details class="process-item">
+          <summary class="process-item-summary">
+            <span class="process-index">${idx}</span>
+            <span class="process-summary-main"><span class="process-kind">생각 과정</span>
+            <span class="process-detail">${summary}</span></span>
+          </summary>
+          <div class="process-content"><pre class="claude-event-pre">${text}</pre></div>
+        </details>`;
+      }
+      if (ev.type === 'tool-use') {
+        const name = escapeHtmlLite(ev.name || 'tool');
+        const input = escapeHtmlLite(ev.input || '');
+        return `<details class="process-item">
+          <summary class="process-item-summary">
+            <span class="process-index">${idx}</span>
+            <span class="process-summary-main"><span class="process-kind">도구 사용: ${name}</span></span>
+          </summary>
+          <div class="process-content"><pre class="claude-event-pre">${input}</pre></div>
+        </details>`;
+      }
+      if (ev.type === 'tool-result') {
+        const text = escapeHtmlLite(ev.text || '');
+        const summary = escapeHtmlLite((ev.text || '').split('\n')[0].slice(0, 120));
+        return `<details class="process-item">
+          <summary class="process-item-summary">
+            <span class="process-index">${idx}</span>
+            <span class="process-summary-main"><span class="process-kind">도구 결과</span>
+            <span class="process-detail">${summary}</span></span>
+          </summary>
+          <div class="process-content"><pre class="claude-event-pre">${text}</pre></div>
+        </details>`;
+      }
+      return '';
+    }).join('');
+
+    return `<details class="claude-events-panel">
+      <summary class="claude-events-summary">답변 과정 (${events.length}단계)</summary>
+      <div class="process-stack">${items}</div>
+    </details>`;
+  }
+
   function renderAIBody(msg, opts = {}) {
     // 서브에이전트 스트리밍 중이면 작업 표시기 + thinking-log 반환
     if (msg._subagentStreaming) {
@@ -9043,7 +9131,8 @@ ${userPrompt}
     }
 
     // 렌더링 캐시: 동일 content + activeTab 조합이면 이전 HTML 재사용
-    const cacheKey = msg.content + '|' + (opts?.activeTab || 'answer');
+    const eventsKey = Array.isArray(msg.claudeEvents) ? msg.claudeEvents.length : 0;
+    const cacheKey = msg.content + '|' + (opts?.activeTab || 'answer') + '|ce' + eventsKey;
     const cached = getCachedRender(cacheKey);
     if (cached) return cached;
 
@@ -9060,6 +9149,11 @@ ${userPrompt}
       }
     }
     if (!html) html = renderMarkdown(msg.content);
+
+    // Claude CLI 이벤트 접이식 패널 추가
+    if (Array.isArray(msg.claudeEvents) && msg.claudeEvents.length > 0) {
+      html = renderClaudeEventsPanel(msg.claudeEvents) + html;
+    }
 
     setCachedRender(cacheKey, html);
     return html;
@@ -9821,6 +9915,8 @@ ${userPrompt}
       currentAiEl: aiEl,
       betweenTurns: false,
       turnCount: 0,
+      // Claude CLI 이벤트 축적 (thinking, tool-use, tool-result)
+      claudeEvents: [],
     };
     convStreams.set(convId, streamState);
 
@@ -9857,6 +9953,12 @@ ${userPrompt}
       const currentMsg = streamState.currentAiMsg;
       const currentEl = streamState.currentAiEl;
       currentMsg.content = fullOutput;
+
+      // Claude CLI 이벤트를 메시지에 복사
+      if (streamState.claudeEvents.length > 0) {
+        currentMsg.claudeEvents = streamState.claudeEvents.slice();
+        streamState.claudeEvents = [];
+      }
 
       const turnSections = parseClaudeOutput(fullOutput);
       const sid = extractClaudeSessionId(turnSections);
@@ -9934,7 +10036,7 @@ ${userPrompt}
       }
     });
 
-    const unsubStream = window.electronAPI.cli.onStream(({ id, chunk, type, replace }) => {
+    const unsubStream = window.electronAPI.cli.onStream(({ id, chunk, type, replace, usage: evtUsage, modelUsage: evtModelUsage, sessionUsage: evtSessionUsage }) => {
       if (id !== streamId || finished) return;
       // 턴 사이: 세션 ID만 캡처하고 나머지 무시
       if (streamState.betweenTurns) {
@@ -9959,29 +10061,48 @@ ${userPrompt}
       }
 
       // Claude CLI stream-json event types
-      if (type === 'thinking') {
-        // Thinking content — add to preview lines but not main output
-        const thinkingText = String(chunk || '').trim();
-        if (thinkingText) {
-          pushStreamingPreviewLine(previewState, `[thinking] ${thinkingText.slice(0, 300)}`);
+      if (type === 'thinking' || type === 'tool-use' || type === 'tool-result') {
+        const chunkText = String(chunk || '').trim();
+        if (chunkText) {
+          if (type === 'thinking') {
+            const last = streamState.claudeEvents[streamState.claudeEvents.length - 1];
+            if (last && last.type === 'thinking') {
+              last.text += '\n' + chunkText;
+            } else {
+              streamState.claudeEvents.push({ type: 'thinking', text: chunkText });
+            }
+            const lines = chunkText.split(/\r?\n/).filter(Boolean);
+            pushStreamingPreviewLine(previewState, `[thinking] ${lines[lines.length - 1] || chunkText}`);
+          } else if (type === 'tool-use') {
+            let toolName = 'unknown', toolInput = chunkText;
+            try {
+              const parsed = JSON.parse(chunkText);
+              toolName = parsed.name || parsed.tool_name || 'unknown';
+              toolInput = JSON.stringify(parsed.input || parsed.arguments || parsed, null, 2);
+            } catch { /* not json */ }
+            streamState.claudeEvents.push({ type: 'tool-use', name: toolName, input: toolInput });
+            pushStreamingPreviewLine(previewState, `[tool] ${toolName}: ${compactPreviewText(toolInput, 200)}`);
+          } else {
+            streamState.claudeEvents.push({ type: 'tool-result', text: chunkText });
+            pushStreamingPreviewLine(previewState, `[result] ${compactPreviewText(chunkText, 200)}`);
+          }
         }
-        scheduleStreamRender();
-        return;
-      }
-
-      if (type === 'tool-use') {
-        const toolText = String(chunk || '').trim();
-        if (toolText) {
-          pushStreamingPreviewLine(previewState, `[tool] ${toolText.slice(0, 300)}`);
-        }
-        scheduleStreamRender();
-        return;
-      }
-
-      if (type === 'tool-result') {
-        const resultText = String(chunk || '').trim();
-        if (resultText) {
-          pushStreamingPreviewLine(previewState, `[result] ${resultText.slice(0, 300)}`);
+        // 즉시 프리뷰 갱신
+        if (convId === activeConvId) {
+          const liveBody = resolveBodyEl();
+          if (SHOW_STREAMING_WORK_PANEL) {
+            const logEl = liveBody.querySelector('.thinking-log');
+            renderThinkingLogLines(logEl, previewState.lines);
+          } else {
+            renderStreamingResponsePreview(
+              liveBody,
+              String(latestSections?.response?.content || '').trim(),
+              previewState.lines,
+              STREAM_INLINE_PROGRESS_VISIBLE_LINES,
+              { showProgress: true, skipPreprocess: true }
+            );
+          }
+          scrollToBottom();
         }
         scheduleStreamRender();
         return;
@@ -10002,7 +10123,22 @@ ${userPrompt}
       }
 
       if (type === 'rate-limit') {
-        // Rate limit info from Claude CLI
+        // Claude CLI rate_limit_event: {status, resetsAt, rateLimitType, ...}
+        const rlText = String(chunk || '').trim();
+        if (rlText) {
+          try {
+            const rlInfo = JSON.parse(rlText);
+            const resetsAtRaw = rlInfo.resetsAt;
+            const resetsAtMs = resetsAtRaw
+              ? (resetsAtRaw > 1e12 ? resetsAtRaw : resetsAtRaw * 1000)
+              : null;
+            if (resetsAtMs) {
+              const snapshot = { h5ResetAt: resetsAtMs, updatedAt: Date.now() };
+              mergeClaudeLimitSnapshot(snapshot);
+              renderClaudeStatusbar();
+            }
+          } catch { /* not json, try legacy */ }
+        }
         applyRealtimeRateLimitFromChunk(streamState, chunk);
         scheduleStreamRender();
         return;
@@ -10029,6 +10165,37 @@ ${userPrompt}
             }
             if (resultData.session_id) conv.claudeSessionId = resultData.session_id;
           } catch { /* not json */ }
+        }
+        // usage 정보로 statusbar 업데이트
+        if (evtUsage) {
+          const inputTokens = Number(evtUsage.input_tokens) || 0;
+          const outputTokens = Number(evtUsage.output_tokens) || 0;
+          const cacheRead = Number(evtUsage.cache_read_input_tokens) || 0;
+          const cacheCreate = Number(evtUsage.cache_creation_input_tokens) || 0;
+          const totalTokens = inputTokens + outputTokens + cacheRead + cacheCreate;
+          // modelUsage에서 contextWindow 추출
+          let contextWindow = 200000;
+          if (evtModelUsage && typeof evtModelUsage === 'object') {
+            const firstModel = Object.values(evtModelUsage)[0];
+            if (firstModel?.contextWindow) contextWindow = Number(firstModel.contextWindow) || 200000;
+          }
+          if (totalTokens > 0) {
+            claudeLimitSnapshot.tokenInfo = {
+              totalTokens,
+              contextWindow,
+              inputTokens: inputTokens + cacheRead + cacheCreate,
+              cachedInputTokens: cacheRead,
+              outputTokens,
+              reasoningTokens: 0,
+            };
+            claudeLimitSnapshot.updatedAt = Date.now();
+          }
+          // 세션 누적 사용량 저장
+          if (evtSessionUsage) {
+            claudeLimitSnapshot.sessionUsage = evtSessionUsage;
+          }
+          saveClaudeLimitSnapshot();
+          renderClaudeStatusbar();
         }
         scheduleStreamRender();
         return;

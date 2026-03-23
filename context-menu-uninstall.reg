@@ -1,0 +1,6 @@
+Windows Registry Editor Version 5.00
+
+; CLI Chat - 우클릭 컨텍스트 메뉴 제거
+
+[-HKEY_CURRENT_USER\Software\Classes\Directory\Background\shell\CLIChat]
+[-HKEY_CURRENT_USER\Software\Classes\Directory\shell\CLIChat]

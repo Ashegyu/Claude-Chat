@@ -2085,6 +2085,49 @@ body.sidebar-resizing * {
   letter-spacing: 0.5px; text-transform: uppercase; font-weight: 700;
 }
 .process-extra { margin: 4px 0 0; padding-left: 16px; }
+
+/* Claude Events Panel */
+.claude-events-panel {
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 212, 255, 0.02);
+}
+.claude-events-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  list-style: none;
+  user-select: none;
+}
+.claude-events-summary::-webkit-details-marker { display: none; }
+.claude-events-summary::before {
+  content: '\25B6';
+  font-size: 7px;
+  color: var(--text-muted);
+  transition: transform 200ms ease;
+}
+.claude-events-panel[open] > .claude-events-summary::before { transform: rotate(90deg); }
+.claude-events-panel > .process-stack {
+  padding: 4px 8px 8px;
+}
+.claude-event-pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 11.5px;
+  font-family: var(--mono);
+  color: var(--text-code);
+  line-height: 1.5;
+  margin: 0;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
 .process-extra-scroll {
   max-height: 280px;
   overflow-y: auto; overflow-x: hidden;

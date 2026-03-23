@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(chcp:*)",
+      "Bash(claude:*)",
+      "Bash(node:*)",
+      "Bash(where claude:*)",
+      "Bash(npm run:*)",
+      "Bash(printf:*)",
+      "Bash(script:*)",
+      "Bash(npm install:*)",
+      "Bash(npx electron-rebuild:*)",
+      "Bash(npm uninstall:*)",
+      "Bash(timeout 15 /c/Program:*)",
+      "Bash(npm ls:*)",
+      "Bash(ls:*)",
+      "Bash(taskkill:*)",
+      "Bash(tasklist:*)",
+      "Bash(rm:*)"
+    ]
+  }
+}
