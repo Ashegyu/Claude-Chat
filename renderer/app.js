@@ -35,6 +35,8 @@
               ? (Number.isFinite(Number(msg.timestamp)) ? Number(msg.timestamp) : Date.now())
               : 0);
           const claudeEvents = Array.isArray(msg.claudeEvents) ? msg.claudeEvents : undefined;
+          const intermediateTexts = Array.isArray(msg.intermediateTexts) ? msg.intermediateTexts : undefined;
+          const finalAnswer = typeof msg.finalAnswer === 'string' ? msg.finalAnswer : undefined;
           return {
             id: typeof msg.id === 'string' && msg.id ? msg.id : `msg_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`,
             role: msg.role === 'user' || msg.role === 'error' ? msg.role : 'ai',
@@ -44,6 +46,8 @@
             actualCodeDiffs,
             actualCodeDiffsFetchedAt,
             ...(claudeEvents ? { claudeEvents } : {}),
+            ...(intermediateTexts ? { intermediateTexts } : {}),
+            ...(finalAnswer ? { finalAnswer } : {}),
           };
         });
       const cwd = typeof item.cwd === 'string' ? item.cwd : '';
@@ -7785,6 +7789,19 @@ ${userPrompt}
     return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
   }
 
+  // 스트리밍 중 중간 답변 패널 (답변 아래에 표시)
+  function renderStreamingIntermediateTexts(texts) {
+    if (!Array.isArray(texts) || texts.length === 0) return '';
+    const items = texts.map((text, i) => {
+      const html = renderMarkdown(formatAnswerLineBreaks(text), { skipPreprocess: true });
+      return `<div class="stream-intermediate-item">
+        <div class="stream-intermediate-label">중간 답변 ${i + 1}</div>
+        <div class="stream-intermediate-content">${html}</div>
+      </div>`;
+    }).join('');
+    return `<div class="stream-intermediate-panel">${items}</div>`;
+  }
+
   function renderStreamingResponseWithProgress(responseText, progressLines, visibleLines = STREAM_INLINE_PROGRESS_VISIBLE_LINES, options = {}) {
     const showProgress = options.showProgress !== false;
     const safeVisibleLines = Math.max(1, Number(visibleLines) || STREAM_INLINE_PROGRESS_VISIBLE_LINES);
@@ -7814,7 +7831,10 @@ ${userPrompt}
       </div>
     </div>`;
 
-    return `${progressHtml}<div class="streaming-answer-body">${answerHtml}</div>`;
+    // 중간 답변 패널 (답변 아래)
+    const intermediateHtml = options.intermediateTexts ? renderStreamingIntermediateTexts(options.intermediateTexts) : '';
+
+    return `${progressHtml}<div class="streaming-answer-body">${answerHtml}</div>${intermediateHtml}`;
   }
 
   function captureInlineProgressScrollState(containerEl) {
@@ -9132,27 +9152,50 @@ ${userPrompt}
 
     // 렌더링 캐시: 동일 content + activeTab 조합이면 이전 HTML 재사용
     const eventsKey = Array.isArray(msg.claudeEvents) ? msg.claudeEvents.length : 0;
-    const cacheKey = msg.content + '|' + (opts?.activeTab || 'answer') + '|ce' + eventsKey;
+    const intermediateKey = Array.isArray(msg.intermediateTexts) ? msg.intermediateTexts.length : 0;
+    const cacheKey = msg.content + '|' + (opts?.activeTab || 'answer') + '|ce' + eventsKey + '|it' + intermediateKey;
     const cached = getCachedRender(cacheKey);
     if (cached) return cached;
 
+    // 중간 답변이 있으면 최종 답변만 메인에 표시
+    const displayContent = msg.finalAnswer || msg.content;
+
     let html;
-    if (msg.profileId === 'claude' && msg.content) {
-      const sections = parseClaudeOutput(msg.content);
+    if (msg.profileId === 'claude' && displayContent) {
+      const sections = parseClaudeOutput(displayContent);
       updateClaudeRuntimeInfo(sections);
       if (sections.response.content || sections.thinking.content) {
         html = renderClaudeStructured(sections, {
-          rawText: msg.content,
+          rawText: displayContent,
           activeTab: opts?.activeTab,
           actualCodeDiffs: Array.isArray(msg.actualCodeDiffs) ? msg.actualCodeDiffs : [],
         });
       }
     }
-    if (!html) html = renderMarkdown(msg.content);
+    if (!html) html = renderMarkdown(displayContent);
 
     // Claude CLI 이벤트 접이식 패널 추가
     if (Array.isArray(msg.claudeEvents) && msg.claudeEvents.length > 0) {
       html = renderClaudeEventsPanel(msg.claudeEvents) + html;
+    }
+
+    // 중간 답변 접이식 패널 (답변 아래)
+    if (Array.isArray(msg.intermediateTexts) && msg.intermediateTexts.length > 0) {
+      const intermediateItems = msg.intermediateTexts.map((text, i) => {
+        const rendered = renderMarkdown(formatAnswerLineBreaks(text));
+        return `<details class="process-item">
+          <summary class="process-item-summary">
+            <span class="process-index">${i + 1}</span>
+            <span class="process-summary-main"><span class="process-kind">중간 답변</span>
+            <span class="process-detail">${escapeHtmlLite((text || '').split('\n')[0].slice(0, 120))}</span></span>
+          </summary>
+          <div class="process-content">${rendered}</div>
+        </details>`;
+      }).join('');
+      html += `<details class="claude-events-panel">
+        <summary class="claude-events-summary">중간 답변 (${msg.intermediateTexts.length}개)</summary>
+        <div class="process-stack">${intermediateItems}</div>
+      </details>`;
     }
 
     setCachedRender(cacheKey, html);
@@ -9917,6 +9960,9 @@ ${userPrompt}
       turnCount: 0,
       // Claude CLI 이벤트 축적 (thinking, tool-use, tool-result)
       claudeEvents: [],
+      // 중간 답변 텍스트 추적
+      intermediateTexts: [],
+      lastIntermediateOffset: 0,
     };
     convStreams.set(convId, streamState);
 
@@ -9958,6 +10004,13 @@ ${userPrompt}
       if (streamState.claudeEvents.length > 0) {
         currentMsg.claudeEvents = streamState.claudeEvents.slice();
         streamState.claudeEvents = [];
+      }
+      // 중간 답변 저장 + 최종 답변 분리
+      if (streamState.intermediateTexts.length > 0) {
+        currentMsg.intermediateTexts = streamState.intermediateTexts.slice();
+        currentMsg.finalAnswer = fullOutput.slice(streamState.lastIntermediateOffset).trim();
+        streamState.intermediateTexts = [];
+        streamState.lastIntermediateOffset = 0;
       }
 
       const turnSections = parseClaudeOutput(fullOutput);
@@ -10024,13 +10077,14 @@ ${userPrompt}
         scrollToBottom();
       } else {
         const progressLines = updateStreamingPreviewLines(previewState, fullOutput, sections);
-        const previewResponse = String(sections?.response?.content || '').trim();
+        // 중간 답변 이후의 현재 답변만 프리뷰에 표시
+        const currentText = fullOutput.slice(streamState.lastIntermediateOffset).trim();
         renderStreamingResponsePreview(
           liveBody,
-          previewResponse,
+          currentText,
           progressLines,
           STREAM_INLINE_PROGRESS_VISIBLE_LINES,
-          { showProgress: true, skipPreprocess: true }
+          { showProgress: true, skipPreprocess: true, intermediateTexts: streamState.intermediateTexts }
         );
         scrollToBottom();
       }
@@ -10074,14 +10128,20 @@ ${userPrompt}
             const lines = chunkText.split(/\r?\n/).filter(Boolean);
             pushStreamingPreviewLine(previewState, `[thinking] ${lines[lines.length - 1] || chunkText}`);
           } else if (type === 'tool-use') {
-            let toolName = 'unknown', toolInput = chunkText;
+            // 도구 사용 전까지의 텍스트를 중간 답변으로 저장
+            const newText = fullOutput.slice(streamState.lastIntermediateOffset).trim();
+            if (newText) {
+              streamState.intermediateTexts.push(newText);
+              streamState.lastIntermediateOffset = fullOutput.length;
+            }
+            let toolName = '', toolInput = chunkText;
             try {
               const parsed = JSON.parse(chunkText);
-              toolName = parsed.name || parsed.tool_name || 'unknown';
+              toolName = parsed.name || parsed.tool_name || '';
               toolInput = JSON.stringify(parsed.input || parsed.arguments || parsed, null, 2);
             } catch { /* not json */ }
             streamState.claudeEvents.push({ type: 'tool-use', name: toolName, input: toolInput });
-            pushStreamingPreviewLine(previewState, `[tool] ${toolName}: ${compactPreviewText(toolInput, 200)}`);
+            pushStreamingPreviewLine(previewState, `[tool] ${toolName || 'tool'}${toolName ? ': ' : ' '}${compactPreviewText(toolInput, 200)}`);
           } else {
             streamState.claudeEvents.push({ type: 'tool-result', text: chunkText });
             pushStreamingPreviewLine(previewState, `[result] ${compactPreviewText(chunkText, 200)}`);
@@ -10094,12 +10154,13 @@ ${userPrompt}
             const logEl = liveBody.querySelector('.thinking-log');
             renderThinkingLogLines(logEl, previewState.lines);
           } else {
+            const currentText = fullOutput.slice(streamState.lastIntermediateOffset).trim();
             renderStreamingResponsePreview(
               liveBody,
-              String(latestSections?.response?.content || '').trim(),
+              currentText,
               previewState.lines,
               STREAM_INLINE_PROGRESS_VISIBLE_LINES,
-              { showProgress: true, skipPreprocess: true }
+              { showProgress: true, skipPreprocess: true, intermediateTexts: streamState.intermediateTexts }
             );
           }
           scrollToBottom();
@@ -10211,7 +10272,7 @@ ${userPrompt}
       detectClaudeAgentActivity(chunk, convId);
 
       // 승인 요청 감지
-      if (approvalPolicy !== 'default') {
+      if (approvalPolicy !== 'bypassPermissions' && approvalPolicy !== 'dontAsk') {
         const approval = detectApprovalRequest(chunk);
         if (approval && convId === activeConvId) {
           streamState.pendingApproval = approval;

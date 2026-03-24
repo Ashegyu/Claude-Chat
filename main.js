@@ -680,6 +680,9 @@ function handleClaudeStreamEvent(id, evt) {
     mainWindow.webContents.send('cli:turnDone', { id });
     return;
   }
+
+  // 미인식 이벤트도 renderer에 raw로 전달 (승인 요청 등 누락 방지)
+  send({ type: 'raw-event', chunk: JSON.stringify(evt), rawEvent: evt });
 }
 
 // --- CLI 실행 (child_process.spawn 기반) ---
@@ -710,8 +713,14 @@ ipcMain.handle('cli:run', (event, { id, profile, prompt, cwd }) => {
 
     runningProcesses.set(id, createProcessHandle('spawn', child));
 
-    // stdin을 즉시 닫아 "no stdin data received" 경고 방지
-    child.stdin?.end();
+    // permission-mode에 따라 stdin 처리: 승인 응답이 필요한 모드에선 열어두기
+    const permMode = (() => {
+      const idx = args.indexOf('--permission-mode');
+      return idx !== -1 && args[idx + 1] ? args[idx + 1] : 'default';
+    })();
+    if (permMode === 'bypassPermissions' || permMode === 'dontAsk') {
+      child.stdin?.end();
+    }
 
     let lineBuf = '';
 

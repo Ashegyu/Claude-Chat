@@ -16,7 +16,8 @@
       "Bash(ls:*)",
       "Bash(taskkill:*)",
       "Bash(tasklist:*)",
-      "Bash(rm:*)"
+      "Bash(rm:*)",
+      "Bash(\"C:\\\\Users\\\\GC\\\\.local\\\\bin\\\\claude.exe\":*)"
     ]
   }
 }

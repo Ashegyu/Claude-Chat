@@ -2128,6 +2128,37 @@ body.sidebar-resizing * {
   overflow-y: auto;
 }
 
+/* Streaming Intermediate Texts Panel (스트리밍 중 중간 답변 표시) */
+.stream-intermediate-panel {
+  margin-top: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 212, 255, 0.03);
+  padding: 8px 10px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+.stream-intermediate-item {
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+.stream-intermediate-item:last-child { border-bottom: none; }
+.stream-intermediate-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.stream-intermediate-content {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+.stream-intermediate-content p { margin: 0 0 4px; }
+.stream-intermediate-content pre { font-size: 11.5px; }
+
 .process-extra-scroll {
   max-height: 280px;
   overflow-y: auto; overflow-x: hidden;
