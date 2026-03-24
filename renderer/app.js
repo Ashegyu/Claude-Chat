@@ -7860,8 +7860,21 @@ ${userPrompt}
   function renderStreamingResponsePreview(containerEl, responseText, progressLines, visibleLines = STREAM_INLINE_PROGRESS_VISIBLE_LINES, options = {}) {
     if (!containerEl) return;
     const scrollState = captureInlineProgressScrollState(containerEl);
+    // 사용자가 위로 스크롤한 상태면 $messages 스크롤 위치 보존
+    const preserveScroll = !shouldAutoScrollMessages && $messages;
+    const prevScrollTop = preserveScroll ? $messages.scrollTop : 0;
+    const prevScrollHeight = preserveScroll ? $messages.scrollHeight : 0;
     containerEl.innerHTML = renderStreamingResponseWithProgress(responseText, progressLines, visibleLines, options);
     restoreInlineProgressScrollState(containerEl, scrollState);
+    if (preserveScroll) {
+      // DOM 높이 변화분만큼 스크롤 위치 보정
+      const delta = $messages.scrollHeight - prevScrollHeight;
+      if (delta !== 0) {
+        suppressMessagesScrollEvent = true;
+        $messages.scrollTop = prevScrollTop + delta;
+        requestAnimationFrame(() => { suppressMessagesScrollEvent = false; });
+      }
+    }
   }
 
   function normalizeDetailLine(line) {
@@ -10032,8 +10045,19 @@ ${userPrompt}
         } else {
           const finalBody = liveEl.querySelector('.msg-body');
           if (finalBody) {
+            const _preserveScroll = !shouldAutoScrollMessages && $messages;
+            const _prevTop = _preserveScroll ? $messages.scrollTop : 0;
+            const _prevH = _preserveScroll ? $messages.scrollHeight : 0;
             finalBody.innerHTML = renderAIBody(currentMsg);
             stickProcessStackToBottom(finalBody);
+            if (_preserveScroll) {
+              const _d = $messages.scrollHeight - _prevH;
+              if (_d !== 0) {
+                suppressMessagesScrollEvent = true;
+                $messages.scrollTop = _prevTop + _d;
+                requestAnimationFrame(() => { suppressMessagesScrollEvent = false; });
+              }
+            }
           }
         }
       }
