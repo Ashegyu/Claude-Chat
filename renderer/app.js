@@ -3210,6 +3210,7 @@
         newConversation();
       }
       const conv = getActiveConversation();
+      if (!conv) return true;
       conv.claudeSessionId = sessionArg;
       conv.lastClaudeApprovalPolicy = '';
       saveConversations();
@@ -7857,24 +7858,48 @@ ${userPrompt}
       : Math.min(maxTop, Math.max(0, scrollState.scrollTop));
   }
 
+  function captureStreamingScrollState(containerEl) {
+    const states = {};
+    // 중간 답변 패널 스크롤
+    const panel = containerEl?.querySelector('.stream-intermediate-panel');
+    if (panel) {
+      const maxTop = Math.max(0, panel.scrollHeight - panel.clientHeight);
+      states.panel = { scrollTop: panel.scrollTop, nearBottom: (maxTop - panel.scrollTop) <= 4 };
+    }
+    // 답변 본문 스크롤
+    const body = containerEl?.querySelector('.streaming-answer-body');
+    if (body) {
+      const maxTop = Math.max(0, body.scrollHeight - body.clientHeight);
+      states.body = { scrollTop: body.scrollTop, nearBottom: (maxTop - body.scrollTop) <= 4 };
+    }
+    return states;
+  }
+
+  function restoreStreamingScrollState(containerEl, states) {
+    if (!states) return;
+    if (states.panel) {
+      const panel = containerEl?.querySelector('.stream-intermediate-panel');
+      if (panel) {
+        const maxTop = Math.max(0, panel.scrollHeight - panel.clientHeight);
+        panel.scrollTop = states.panel.nearBottom ? maxTop : Math.min(maxTop, states.panel.scrollTop);
+      }
+    }
+    if (states.body) {
+      const body = containerEl?.querySelector('.streaming-answer-body');
+      if (body) {
+        const maxTop = Math.max(0, body.scrollHeight - body.clientHeight);
+        body.scrollTop = states.body.nearBottom ? maxTop : Math.min(maxTop, states.body.scrollTop);
+      }
+    }
+  }
+
   function renderStreamingResponsePreview(containerEl, responseText, progressLines, visibleLines = STREAM_INLINE_PROGRESS_VISIBLE_LINES, options = {}) {
     if (!containerEl) return;
     const scrollState = captureInlineProgressScrollState(containerEl);
-    // 사용자가 위로 스크롤한 상태면 $messages 스크롤 위치 보존
-    const preserveScroll = !shouldAutoScrollMessages && $messages;
-    const prevScrollTop = preserveScroll ? $messages.scrollTop : 0;
-    const prevScrollHeight = preserveScroll ? $messages.scrollHeight : 0;
+    const streamScrollState = captureStreamingScrollState(containerEl);
     containerEl.innerHTML = renderStreamingResponseWithProgress(responseText, progressLines, visibleLines, options);
     restoreInlineProgressScrollState(containerEl, scrollState);
-    if (preserveScroll) {
-      // DOM 높이 변화분만큼 스크롤 위치 보정
-      const delta = $messages.scrollHeight - prevScrollHeight;
-      if (delta !== 0) {
-        suppressMessagesScrollEvent = true;
-        $messages.scrollTop = prevScrollTop + delta;
-        requestAnimationFrame(() => { suppressMessagesScrollEvent = false; });
-      }
-    }
+    restoreStreamingScrollState(containerEl, streamScrollState);
   }
 
   function normalizeDetailLine(line) {
@@ -9288,6 +9313,16 @@ ${userPrompt}
     let finished = false;
     let exitCode = null;
 
+    // 기존 스트림 정리
+    const prevStream = convStreams.get(convId);
+    if (prevStream) {
+      if (prevStream.unsubStream) prevStream.unsubStream();
+      if (prevStream.unsubDone) prevStream.unsubDone();
+      if (prevStream.unsubError) prevStream.unsubError();
+      if (prevStream.elapsedTimer) clearInterval(prevStream.elapsedTimer);
+      convStreams.delete(convId);
+    }
+
     // 대화별 스트리밍 상태 등록
     const streamState = { streamId };
     convStreams.set(convId, streamState);
@@ -9537,6 +9572,16 @@ ${userPrompt}
         scrollToBottom();
       }
     });
+
+    // 기존 스트림 정리
+    const prevStream = convStreams.get(convId);
+    if (prevStream) {
+      if (prevStream.unsubStream) prevStream.unsubStream();
+      if (prevStream.unsubDone) prevStream.unsubDone();
+      if (prevStream.unsubError) prevStream.unsubError();
+      if (prevStream.elapsedTimer) clearInterval(prevStream.elapsedTimer);
+      convStreams.delete(convId);
+    }
 
     // 대화별 스트리밍 상태 등록
     const streamState = { streamId, elapsedTimer, liveAiEl: null, rateLimitTail: '' };
@@ -9869,6 +9914,7 @@ ${userPrompt}
 
     const convId = activeConvId;
     const conv = getActiveConversation();
+    if (!conv) return;
     const profile = PROFILES.find(p => p.id === activeProfileId);
 
     // === 자동 컨텍스트 압축 ===
@@ -9963,6 +10009,16 @@ ${userPrompt}
 
     const streamId = aiMsg.id;
 
+    // 기존 스트림 정리
+    const prevStream = convStreams.get(convId);
+    if (prevStream) {
+      if (prevStream.unsubStream) prevStream.unsubStream();
+      if (prevStream.unsubDone) prevStream.unsubDone();
+      if (prevStream.unsubError) prevStream.unsubError();
+      if (prevStream.elapsedTimer) clearInterval(prevStream.elapsedTimer);
+      convStreams.delete(convId);
+    }
+
     // 대화별 스트리밍 상태 등록
     const streamState = {
       streamId, elapsedTimer, liveAiEl: null, rateLimitTail: '',
@@ -10045,19 +10101,8 @@ ${userPrompt}
         } else {
           const finalBody = liveEl.querySelector('.msg-body');
           if (finalBody) {
-            const _preserveScroll = !shouldAutoScrollMessages && $messages;
-            const _prevTop = _preserveScroll ? $messages.scrollTop : 0;
-            const _prevH = _preserveScroll ? $messages.scrollHeight : 0;
             finalBody.innerHTML = renderAIBody(currentMsg);
             stickProcessStackToBottom(finalBody);
-            if (_preserveScroll) {
-              const _d = $messages.scrollHeight - _prevH;
-              if (_d !== 0) {
-                suppressMessagesScrollEvent = true;
-                $messages.scrollTop = _prevTop + _d;
-                requestAnimationFrame(() => { suppressMessagesScrollEvent = false; });
-              }
-            }
           }
         }
       }
@@ -10156,8 +10201,8 @@ ${userPrompt}
             const newText = fullOutput.slice(streamState.lastIntermediateOffset).trim();
             if (newText) {
               streamState.intermediateTexts.push(newText);
-              streamState.lastIntermediateOffset = fullOutput.length;
             }
+            streamState.lastIntermediateOffset = fullOutput.length;
             let toolName = '', toolInput = chunkText;
             try {
               const parsed = JSON.parse(chunkText);
@@ -10186,8 +10231,10 @@ ${userPrompt}
               STREAM_INLINE_PROGRESS_VISIBLE_LINES,
               { showProgress: true, skipPreprocess: true, intermediateTexts: streamState.intermediateTexts }
             );
+            // 중간 답변 패널 스크롤을 아래로
+            const panel = liveBody.querySelector('.stream-intermediate-panel');
+            if (panel) panel.scrollTop = panel.scrollHeight;
           }
-          scrollToBottom();
         }
         scheduleStreamRender();
         return;
@@ -10199,7 +10246,7 @@ ${userPrompt}
         if (initText) {
           try {
             const initData = JSON.parse(initText);
-            if (initData.sessionId) conv.claudeSessionId = initData.sessionId;
+            if (initData.sessionId && !conv.claudeSessionId) conv.claudeSessionId = initData.sessionId;
           } catch { /* not json */ }
           pushStreamingPreviewLine(previewState, `세션 초기화 완료`);
         }
@@ -10282,6 +10329,12 @@ ${userPrompt}
           saveClaudeLimitSnapshot();
           renderClaudeStatusbar();
         }
+        scheduleStreamRender();
+        return;
+      }
+
+      // raw-event 등 비텍스트 타입은 fullOutput에 포함하지 않음
+      if (type && type !== 'stdout') {
         scheduleStreamRender();
         return;
       }

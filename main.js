@@ -310,6 +310,10 @@ function readFilesGeneric(filePaths, limit = 10) {
   const results = [];
   for (const fp of filePaths.slice(0, limit)) {
     const resolved = resolveFilePath(fp) || fp;
+    if (path.relative(workingDirectory, resolved).startsWith('..')) {
+      results.push({ success: false, error: '작업 디렉토리 밖의 파일에 접근할 수 없습니다.', name: fp });
+      continue;
+    }
     results.push(readFileGeneric(resolved));
   }
 
@@ -692,7 +696,8 @@ ipcMain.handle('cli:run', (event, { id, profile, prompt, cwd }) => {
   const baseArgs = [...(profile.args || [])];
 
   // Build claude args
-  const args = ['-p', '--verbose', ...baseArgs];
+  const hasOutputFormat = baseArgs.some(a => a === '--output-format');
+  const args = ['-p', '--verbose', ...(hasOutputFormat ? [] : ['--output-format', 'stream-json']), ...baseArgs];
   if (promptText) {
     args.push('--', promptText);
   }
@@ -853,6 +858,9 @@ ipcMain.handle('file:read', (event, { filePath }) => {
   const resolvedPath = resolveFilePath(filePath);
   if (!resolvedPath) {
     return { success: false, error: '파일 경로를 입력하세요.' };
+  }
+  if (path.relative(workingDirectory, resolvedPath).startsWith('..')) {
+    return { success: false, error: '작업 디렉토리 밖의 파일에 접근할 수 없습니다.' };
   }
   return readFileGeneric(resolvedPath);
 });
@@ -1052,8 +1060,8 @@ ipcMain.handle('repo:commit', async (event, arg) => {
     if (!rootResult.ok) return { success: false, error: 'git repository not found' };
     const repoRoot = rootResult.stdout.trim();
 
-    // 모든 변경 사항 stage
-    const addResult = await runGitCommandAsync(['add', '-A'], repoRoot);
+    // 추적 중인 파일의 변경 사항만 stage (untracked 파일 제외)
+    const addResult = await runGitCommandAsync(['add', '-u'], repoRoot);
     if (!addResult.ok) return { success: false, error: `git add failed: ${addResult.stderr}` };
 
     // staged 파일 확인
