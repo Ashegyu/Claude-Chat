@@ -10958,11 +10958,11 @@ ${userPrompt}
   document.addEventListener('keydown', (e) => {
     if (e.ctrlKey && e.key === 'n') {
       e.preventDefault();
-      if (getSelectedProjectPath()) {
-        newConversation(getSelectedProjectPath());
-      } else {
-        void openProjectPicker();
-      }
+      newConversation(getSelectedProjectPath());
+    }
+    if (e.ctrlKey && e.key === 'p') {
+      e.preventDefault();
+      void openProjectPicker();
     }
     if (e.ctrlKey && e.key.toLowerCase() === 'b') {
       e.preventDefault();

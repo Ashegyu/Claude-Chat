@@ -713,14 +713,8 @@ ipcMain.handle('cli:run', (event, { id, profile, prompt, cwd }) => {
 
     runningProcesses.set(id, createProcessHandle('spawn', child));
 
-    // permission-mode에 따라 stdin 처리: 승인 응답이 필요한 모드에선 열어두기
-    const permMode = (() => {
-      const idx = args.indexOf('--permission-mode');
-      return idx !== -1 && args[idx + 1] ? args[idx + 1] : 'default';
-    })();
-    if (permMode === 'bypassPermissions' || permMode === 'dontAsk') {
-      child.stdin?.end();
-    }
+    // stdin을 즉시 닫아 -p 모드에서 프롬프트 처리가 시작되도록 함
+    child.stdin?.end();
 
     let lineBuf = '';
 
