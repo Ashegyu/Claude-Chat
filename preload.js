@@ -74,6 +74,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   system: {
     info: () => ipcRenderer.invoke('system:info'),
   },
+  settings: {
+    load: () => ipcRenderer.invoke('settings:load'),
+    save: (scope, data) => ipcRenderer.invoke('settings:save', { scope, data }),
+  },
 });
 
 contextBridge.exposeInMainWorld('hljs', {

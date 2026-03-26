@@ -1441,6 +1441,50 @@ ipcMain.on('store:saveConversationsSync', (event, data) => {
   }
 });
 
+// --- Claude 설정 파일 읽기/쓰기 ---
+function getSettingsPaths() {
+  const homedir = os.homedir();
+  return {
+    global: path.join(homedir, '.claude', 'settings.json'),
+    projectLocal: path.join(workingDirectory, '.claude', 'settings.local.json'),
+  };
+}
+
+ipcMain.handle('settings:load', () => {
+  try {
+    const paths = getSettingsPaths();
+    const result = {};
+    for (const [key, filePath] of Object.entries(paths)) {
+      try {
+        if (fs.existsSync(filePath)) {
+          result[key] = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+        } else {
+          result[key] = {};
+        }
+      } catch {
+        result[key] = {};
+      }
+    }
+    return { success: true, data: result, paths };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('settings:save', (event, { scope, data }) => {
+  try {
+    const paths = getSettingsPaths();
+    const filePath = paths[scope];
+    if (!filePath) return { success: false, error: `Unknown scope: ${scope}` };
+    const dir = path.dirname(filePath);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
 app.whenReady().then(createWindow);
 app.on('window-all-closed', () => {
   app.quit();
