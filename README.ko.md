@@ -2,6 +2,8 @@
 
 > **[English README](README.md)**
 
+![Claude Chat 스크린샷](1.png)
+
 Claude CLI를 GUI로 사용할 수 있는 Electron 기반 데스크톱 채팅 앱입니다. 마크다운 렌더링, 파일 첨부, 코드 리뷰, 서브에이전트, 다국어(한국어/영어) 등 다양한 기능을 지원합니다.
 
 ## 필수 조건

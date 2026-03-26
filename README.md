@@ -2,6 +2,8 @@
 
 > **[한국어 README](README.ko.md)**
 
+![Claude Chat Screenshot](1.png)
+
 An Electron-based desktop chat app that provides a GUI for the Claude CLI. Supports markdown rendering, file attachments, code review, subagents, i18n (Korean/English), and more.
 
 ## Prerequisites
