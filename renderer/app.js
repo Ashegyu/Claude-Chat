@@ -769,8 +769,7 @@
 
   const SLASH_COMMANDS = [
     // --- Claude 실행 ---
-    { command: '/search', description: '웹 검색 활성화하여 질문', usage: '/search [질문]' },
-    { command: '/review', description: '코드 리뷰 (uncommitted)', usage: '/review [지시사항]' },
+{ command: '/review', description: '코드 리뷰 (uncommitted)', usage: '/review [지시사항]' },
     { command: '/review-base', description: '브랜치 기준 코드 리뷰', usage: '/review-base [브랜치] [지시]' },
     { command: '/review-commit', description: '커밋 리뷰', usage: '/review-commit [SHA]' },
     { command: '/apply', description: 'Claude diff를 git apply', usage: '/apply [task-id]' },
@@ -806,6 +805,9 @@
     { command: '/features', description: 'Claude CLI feature 목록', usage: '/features' },
     { command: '/version', description: 'Claude CLI 버전', usage: '/version' },
     { command: '/help', description: '명령어 목록', usage: '/help' },
+    // --- 서브에이전트 ---
+    // --- CLAUDE.md ---
+    { command: '/claude-md-improver', description: 'CLAUDE.md 감사 및 개선', usage: '/claude-md-improver' },
     // --- 서브에이전트 ---
     { command: '/subagent', description: '서브에이전트 생성 (병렬 실행)', usage: '/subagent [--auto-close] [에이전트명] [프롬프트]' },
     { command: '/auto-agent', description: '작업 자동 분배 (AI가 에이전트 배정)', usage: '/auto-agent [작업 설명]' },
@@ -3048,12 +3050,10 @@
       return true;
     }
 
-    if (command === '/search') {
-      if (!argText) {
-        showSlashFeedback('/search 뒤에 질문을 입력하세요.', true);
-        return true;
-      }
-      await runClaudeWithExtraArgs(['--search'], argText, { forceNewSession: true });
+
+    if (command === '/claude-md-improver') {
+      showSlashFeedback('CLAUDE.md 감사 및 개선을 시작합니다...', false);
+      await runClaudeWithExtraArgs([], '/claude-md-improver', { forceNewSession: true });
       return true;
     }
 
