@@ -7800,9 +7800,15 @@ ${userPrompt}
   function renderStreamingIntermediateTexts(texts) {
     if (!Array.isArray(texts) || texts.length === 0) return '';
     const items = texts.map((text, i) => {
-      const html = renderMarkdown(formatAnswerLineBreaks(text), { skipPreprocess: true });
-      return `<div class="stream-intermediate-item">
-        <div class="stream-intermediate-label">중간 답변 ${i + 1}</div>
+      const isThinking = (text || '').startsWith('[thinking]\n');
+      const displayText = isThinking ? text.slice('[thinking]\n'.length) : text;
+      const label = isThinking ? `생각 과정 ${i + 1}` : `중간 답변 ${i + 1}`;
+      const labelClass = isThinking ? 'is-thinking' : '';
+      const html = isThinking
+        ? `<pre class="claude-event-pre">${escapeHtmlLite(displayText)}</pre>`
+        : renderMarkdown(formatAnswerLineBreaks(displayText), { skipPreprocess: true });
+      return `<div class="stream-intermediate-item ${labelClass}">
+        <div class="stream-intermediate-label">${label}</div>
         <div class="stream-intermediate-content">${html}</div>
       </div>`;
     }).join('');
@@ -7922,11 +7928,29 @@ ${userPrompt}
 
       // 서브에이전트 열 스크롤 보존
       const subScroll = subCol.scrollTop;
-      const subNearBottom = (subCol.scrollHeight - subCol.scrollTop - subCol.clientHeight) <= 4;
+      const subNearBottom = (subCol.scrollHeight - subCol.scrollTop - subCol.clientHeight) <= 10;
+      // 각 패널 내 .sa-children 스크롤 상태 캡처
+      const childScrollStates = [];
+      subCol.querySelectorAll('.sa-children').forEach((el, i) => {
+        const maxTop = Math.max(0, el.scrollHeight - el.clientHeight);
+        childScrollStates[i] = { scrollTop: el.scrollTop, nearBottom: (maxTop - el.scrollTop) <= 10 };
+      });
       subCol.innerHTML = subagentHtml;
+      // 열 스크롤 복원
       subCol.scrollTop = subNearBottom ? subCol.scrollHeight : subScroll;
-      // 텍스트 블록 자동 하단 스크롤
-      subCol.querySelectorAll('.sa-text-content').forEach(el => { el.scrollTop = el.scrollHeight; });
+      // 각 패널 내 .sa-children 스크롤 복원
+      subCol.querySelectorAll('.sa-children').forEach((el, i) => {
+        const prev = childScrollStates[i];
+        if (prev) {
+          const maxTop = Math.max(0, el.scrollHeight - el.clientHeight);
+          el.scrollTop = prev.nearBottom ? maxTop : Math.min(maxTop, prev.scrollTop);
+        } else {
+          // 새 패널은 하단으로
+          el.scrollTop = el.scrollHeight;
+        }
+      });
+      // 블록 콘텐츠는 하단 스크롤 유지
+      subCol.querySelectorAll('.sa-block-content').forEach(el => { el.scrollTop = el.scrollHeight; });
     } else {
       // 기존 단일 열 레이아웃
       const scrollState = captureInlineProgressScrollState(containerEl);
@@ -9162,6 +9186,41 @@ ${userPrompt}
     return { currentTab };
   }
 
+  function extractDiffsFromClaudeEvents(events) {
+    if (!Array.isArray(events)) return [];
+    const diffs = [];
+    for (let i = 0; i < events.length; i++) {
+      const ev = events[i];
+      if (ev.type !== 'tool-use') continue;
+      const name = (ev.name || '').toLowerCase();
+      let input = null;
+      try { input = typeof ev.input === 'string' ? JSON.parse(ev.input) : ev.input; } catch { continue; }
+      if (!input) continue;
+
+      if (name === 'edit' && input.file_path && input.old_string != null && input.new_string != null) {
+        const file = input.file_path.replace(/\\/g, '/').replace(/^.*[/\\]/, '');
+        const oldLines = String(input.old_string).split('\n');
+        const newLines = String(input.new_string).split('\n');
+        const diffLines = [];
+        diffLines.push(`--- ${input.file_path}`);
+        diffLines.push(`+++ ${input.file_path}`);
+        diffLines.push(`@@ Edit @@`);
+        for (const l of oldLines) diffLines.push('-' + l);
+        for (const l of newLines) diffLines.push('+' + l);
+        diffs.push({ file: input.file_path, diff: diffLines.join('\n') });
+      } else if (name === 'write' && input.file_path && input.content != null) {
+        const newLines = String(input.content).split('\n');
+        const diffLines = [];
+        diffLines.push(`--- /dev/null`);
+        diffLines.push(`+++ ${input.file_path}`);
+        diffLines.push(`@@ New File @@`);
+        for (const l of newLines) diffLines.push('+' + l);
+        diffs.push({ file: input.file_path, diff: diffLines.join('\n') });
+      }
+    }
+    return diffs;
+  }
+
   function renderFinalSubagentSidePanel(events) {
     if (!Array.isArray(events) || events.length === 0) return '';
     const panels = [];
@@ -9200,24 +9259,36 @@ ${userPrompt}
       // 자식 이벤트로 진행 상황 표시
       let childHtml = '';
       if (sa.childEvents.length > 0) {
-        const items = sa.childEvents.slice(-8).map(ev => {
+        const items = sa.childEvents.slice(-12).map(ev => {
           if (ev.type === 'thinking') {
-            const line = (ev.text || '').split('\n').pop().slice(0, 80);
-            return `<div class="sa-child-item sa-thinking"><span class="sa-child-icon">💭</span>${escapeHtmlLite(line)}</div>`;
+            const text = escapeHtmlLite(ev.text || '');
+            return `<div class="sa-block sa-block-thinking">
+              <div class="sa-block-label">생각 과정</div>
+              <pre class="sa-block-content">${text}</pre>
+            </div>`;
           }
           if (ev.type === 'tool-use') {
             return `<div class="sa-child-item sa-tool"><span class="sa-child-icon">🔧</span><strong>${escapeHtmlLite(ev.name || 'tool')}</strong></div>`;
           }
           if (ev.type === 'tool-result') {
-            const line = (ev.text || '').split('\n')[0].slice(0, 60);
-            return `<div class="sa-child-item sa-result"><span class="sa-child-icon">✓</span>${escapeHtmlLite(line)}</div>`;
+            const text = escapeHtmlLite(ev.text || '');
+            const short = text.split('\n').length <= 2;
+            return short
+              ? `<div class="sa-child-item sa-result"><span class="sa-child-icon">✓</span>${text.slice(0, 80)}</div>`
+              : `<div class="sa-block sa-block-result">
+                  <div class="sa-block-label">도구 결과</div>
+                  <pre class="sa-block-content">${text}</pre>
+                </div>`;
           }
           if (ev.type === 'progress') {
             return `<div class="sa-child-item sa-progress"><span class="sa-child-icon">›</span>${escapeHtmlLite((ev.text || '').slice(0, 80))}</div>`;
           }
           if (ev.type === 'text') {
             const text = escapeHtmlLite(ev.text || '');
-            return `<div class="sa-text-block"><pre class="sa-text-content">${text}</pre></div>`;
+            return `<div class="sa-block sa-block-text">
+              <div class="sa-block-label">중간 답변</div>
+              <pre class="sa-block-content">${text}</pre>
+            </div>`;
           }
           return '';
         }).join('');
@@ -9226,8 +9297,11 @@ ${userPrompt}
         childHtml = '<div class="sa-children"><div class="sa-child-item sa-waiting">작업 준비 중...</div></div>';
       }
       if (sa.done && sa.result) {
-        const preview = escapeHtmlLite((sa.result || '').split('\n')[0].slice(0, 100));
-        childHtml += `<div class="sa-result-preview">${preview}</div>`;
+        const resultText = escapeHtmlLite(sa.result || '');
+        childHtml += `<div class="sa-block sa-block-final">
+          <div class="sa-block-label">최종 결과</div>
+          <pre class="sa-block-content">${resultText}</pre>
+        </div>`;
       }
       return `<div class="live-subagent-panel ${statusClass}">
         <div class="live-subagent-header">
@@ -9377,6 +9451,13 @@ ${userPrompt}
     // 중간 답변이 있으면 최종 답변만 메인에 표시
     const displayContent = msg.finalAnswer || msg.content;
 
+    // claudeEvents에서 Edit/Write 도구 사용을 diff로 변환
+    const eventDiffs = extractDiffsFromClaudeEvents(msg.claudeEvents);
+    const allDiffs = [
+      ...(Array.isArray(msg.actualCodeDiffs) ? msg.actualCodeDiffs : []),
+      ...eventDiffs,
+    ];
+
     let html;
     if (msg.profileId === 'claude' && displayContent) {
       const sections = parseClaudeOutput(displayContent);
@@ -9385,7 +9466,7 @@ ${userPrompt}
         html = renderClaudeStructured(sections, {
           rawText: displayContent,
           activeTab: opts?.activeTab,
-          actualCodeDiffs: Array.isArray(msg.actualCodeDiffs) ? msg.actualCodeDiffs : [],
+          actualCodeDiffs: allDiffs,
         });
       }
     }
@@ -9403,12 +9484,18 @@ ${userPrompt}
     // 중간 답변 접이식 패널 (답변 아래)
     if (Array.isArray(msg.intermediateTexts) && msg.intermediateTexts.length > 0) {
       const intermediateItems = msg.intermediateTexts.map((text, i) => {
-        const rendered = renderMarkdown(formatAnswerLineBreaks(text));
+        const isThinking = (text || '').startsWith('[thinking]\n');
+        const displayText = isThinking ? text.slice('[thinking]\n'.length) : text;
+        const kind = isThinking ? '생각 과정' : '중간 답변';
+        const kindClass = isThinking ? 'thinking' : 'answer';
+        const rendered = isThinking
+          ? `<pre class="claude-event-pre">${escapeHtmlLite(displayText)}</pre>`
+          : renderMarkdown(formatAnswerLineBreaks(displayText));
         return `<details class="process-item">
           <summary class="process-item-summary">
             <span class="process-index">${i + 1}</span>
-            <span class="process-summary-main"><span class="process-kind">중간 답변</span>
-            <span class="process-detail">${escapeHtmlLite((text || '').split('\n')[0].slice(0, 120))}</span></span>
+            <span class="process-summary-main"><span class="process-kind process-kind-${kindClass}">${kind}</span>
+            <span class="process-detail">${escapeHtmlLite((displayText || '').split('\n')[0].slice(0, 120))}</span></span>
           </summary>
           <div class="process-content">${rendered}</div>
         </details>`;
@@ -10398,6 +10485,13 @@ ${userPrompt}
             } else {
               streamState.claudeEvents.push({ type: 'thinking', text: chunkText });
             }
+            // thinking도 중간 답변에 포함
+            const newText = fullOutput.slice(streamState.lastIntermediateOffset).trim();
+            if (newText) {
+              streamState.intermediateTexts.push(newText);
+              streamState.lastIntermediateOffset = fullOutput.length;
+            }
+            streamState.intermediateTexts.push('[thinking]\n' + chunkText);
             if (activeSA) {
               const lastChild = activeSA.childEvents[activeSA.childEvents.length - 1];
               if (lastChild && lastChild.type === 'thinking') { lastChild.text += '\n' + chunkText; }
@@ -10590,17 +10684,38 @@ ${userPrompt}
       // 활성 서브에이전트에 텍스트 출력 추적
       const activeSAText = streamState.activeSubagents.find(sa => !sa.done);
       if (activeSAText) {
-        const text = String(chunk || '').trim();
-        if (text) {
-          const lastChild = activeSAText.childEvents[activeSAText.childEvents.length - 1];
-          if (lastChild && lastChild.type === 'text') {
-            lastChild.text += '\n' + text;
-            // 너무 길면 앞부분 자르기
-            if (lastChild.text.length > 3000) lastChild.text = lastChild.text.slice(-2500);
-          } else {
-            activeSAText.childEvents.push({ type: 'text', text });
+        const raw = String(chunk || '').trim();
+        if (raw) {
+          // stream-json 라인에서 "type":"text" 의 text 값만 추출
+          let extracted = '';
+          for (const line of raw.split(/\r?\n/)) {
+            const trimmed = line.trim();
+            if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+              try {
+                const obj = JSON.parse(trimmed);
+                if (obj.type === 'assistant' && Array.isArray(obj.message?.content)) {
+                  for (const block of obj.message.content) {
+                    if (block.type === 'text' && block.text) extracted += (extracted ? '\n' : '') + block.text;
+                  }
+                  continue;
+                }
+                if (obj.type === 'text' && obj.text) { extracted += (extracted ? '\n' : '') + obj.text; continue; }
+                if (obj.text) { extracted += (extracted ? '\n' : '') + obj.text; continue; }
+              } catch { /* not json */ }
+            }
+            // JSON이 아닌 일반 텍스트
+            if (trimmed) extracted += (extracted ? '\n' : '') + trimmed;
           }
-          if (activeSAText.childEvents.length > 25) activeSAText.childEvents.splice(0, activeSAText.childEvents.length - 25);
+          if (extracted) {
+            const lastChild = activeSAText.childEvents[activeSAText.childEvents.length - 1];
+            if (lastChild && lastChild.type === 'text') {
+              lastChild.text += '\n' + extracted;
+              if (lastChild.text.length > 3000) lastChild.text = lastChild.text.slice(-2500);
+            } else {
+              activeSAText.childEvents.push({ type: 'text', text: extracted });
+            }
+            if (activeSAText.childEvents.length > 25) activeSAText.childEvents.splice(0, activeSAText.childEvents.length - 25);
+          }
         }
       }
       autoSaveIfNeeded();

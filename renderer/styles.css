@@ -2151,6 +2151,9 @@ body.sidebar-resizing * {
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
+.stream-intermediate-item.is-thinking .stream-intermediate-label { color: rgba(168, 85, 247, 0.7); }
+.process-kind-thinking { color: rgba(168, 85, 247, 0.8); }
+.process-kind-answer { color: var(--accent, #00d4ff); }
 .stream-intermediate-content {
   font-size: 13px;
   line-height: 1.5;
@@ -3821,17 +3824,31 @@ button:focus:not(:focus-visible) { outline: none; }
 .sa-child-item.sa-waiting { color: var(--text-muted, #6b72a0); font-style: italic; }
 .sa-child-item.sa-progress { color: var(--text-muted, #6b72a0); font-size: 10px; }
 .sa-child-item.sa-text { color: var(--text, #f0f2f8); }
-.sa-text-block {
-  margin: 4px 0; border-radius: 4px;
-  background: rgba(0, 0, 0, 0.25);
-  border: 1px solid rgba(255, 255, 255, 0.05);
+
+/* Subagent block (thinking / text / result) */
+.sa-block {
+  margin: 6px 0; border-radius: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  overflow: hidden;
 }
-.sa-text-content {
+.sa-block-label {
+  font-size: 10px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.4px; padding: 4px 10px;
+}
+.sa-block-thinking { border-color: rgba(168, 85, 247, 0.2); background: rgba(168, 85, 247, 0.04); }
+.sa-block-thinking .sa-block-label { color: rgba(168, 85, 247, 0.7); background: rgba(168, 85, 247, 0.08); }
+.sa-block-text { border-color: rgba(0, 212, 255, 0.15); background: rgba(0, 212, 255, 0.03); }
+.sa-block-text .sa-block-label { color: rgba(0, 212, 255, 0.7); background: rgba(0, 212, 255, 0.06); }
+.sa-block-result { border-color: rgba(0, 255, 136, 0.15); background: rgba(0, 255, 136, 0.03); }
+.sa-block-result .sa-block-label { color: rgba(0, 255, 136, 0.7); background: rgba(0, 255, 136, 0.06); }
+.sa-block-final { border-color: rgba(0, 255, 136, 0.25); background: rgba(0, 255, 136, 0.04); }
+.sa-block-final .sa-block-label { color: rgba(0, 255, 136, 0.8); background: rgba(0, 255, 136, 0.1); }
+.sa-block-content {
   margin: 0; padding: 8px 10px;
   font-size: 11px; line-height: 1.5;
   color: var(--text, #f0f2f8);
   white-space: pre-wrap; word-break: break-word;
-  max-height: 180px; overflow-y: auto;
+  max-height: 200px; overflow-y: auto;
   scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.12) transparent;
 }
 .sa-result-preview {
