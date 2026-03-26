@@ -1,49 +1,49 @@
 # Claude Chat
 
-Claude CLI를 GUI로 사용할 수 있는 Electron 기반 데스크톱 채팅 앱입니다. 마크다운 렌더링, 파일 첨부, 코드 리뷰, 서브에이전트 등 다양한 기능을 지원합니다.
+> **[한국어 README](README.ko.md)**
 
-## 필수 조건
+An Electron-based desktop chat app that provides a GUI for the Claude CLI. Supports markdown rendering, file attachments, code review, subagents, i18n (Korean/English), and more.
 
-### 1. Node.js 설치
+## Prerequisites
 
-[Node.js 공식 사이트](https://nodejs.org/)에서 LTS 버전을 다운로드하여 설치합니다.
+### 1. Node.js
 
-설치 확인:
+Download and install the LTS version from [nodejs.org](https://nodejs.org/).
 
 ```bash
-node --version   # v18 이상 권장
+node --version   # v18+ recommended
 npm --version
 ```
 
-### 2. Claude CLI 설치 및 로그인
+### 2. Claude CLI
 
-이 앱은 [Claude CLI (Claude Code)](https://docs.anthropic.com/en/docs/claude-code)를 내부적으로 호출하여 동작합니다.
+This app internally calls [Claude CLI (Claude Code)](https://docs.anthropic.com/en/docs/claude-code).
 
 ```bash
 npm install -g @anthropic-ai/claude-code
 ```
 
-설치 후 로그인:
+Login after install:
 
 ```bash
 claude login
 ```
 
-브라우저가 열리면 Anthropic 계정으로 로그인을 완료하세요.
+A browser window will open — complete login with your Anthropic account.
 
-설치 확인:
+Verify:
 
 ```bash
 claude --version
 ```
 
-## 설치
+## Installation
 
-### 인스톨러 (권장)
+### Installer (recommended)
 
-[Releases](../../releases) 페이지에서 `Claude Chat Setup x.x.x.exe`를 다운로드하여 실행합니다.
+Download `Claude Chat Setup x.x.x.exe` from the [Releases](../../releases) page and run it.
 
-### 소스에서 빌드
+### Build from source
 
 ```bash
 git clone <repository-url>
@@ -52,111 +52,121 @@ npm install
 npm run build
 ```
 
-`dist/Claude Chat Setup x.x.x.exe` 인스톨러가 생성됩니다.
+The installer will be generated at `dist/Claude Chat Setup x.x.x.exe`.
 
-포터블 빌드(설치 없이 실행 가능):
+Portable build (no installation required):
 
 ```bash
 npm run build:portable
 ```
 
-### 개발 모드 실행
+### Development mode
 
 ```bash
-npm install   # 최초 1회
+npm install   # first time only
 npm start
 ```
 
-## 빌드 요구사항
+## Build Requirements
 
-| 도구 | 최소 버전 | 용도 |
-|------|----------|------|
-| Node.js | 18+ | 런타임 및 npm |
-| npm | 9+ | 패키지 관리 |
-| Git | 2.x | 소스 클론 및 git 연동 |
-| Windows | 10+ | 빌드 대상 OS |
+| Tool | Min Version | Purpose |
+|------|-------------|---------|
+| Node.js | 18+ | Runtime & npm |
+| npm | 9+ | Package manager |
+| Git | 2.x | Source clone & git integration |
+| Windows | 10+ | Target OS |
 
-추가 의존성은 `npm install` 시 자동으로 설치됩니다 (Electron, electron-builder 등).
+Additional dependencies are installed automatically via `npm install` (Electron, electron-builder, etc.).
 
-## 사용 방법
+## Usage
 
-### 기본 사용
+### Basics
 
-1. 앱을 실행하면 환영 화면이 표시됩니다
-2. 하단 입력창에 질문이나 요청을 입력하고 **Enter**로 전송합니다
-3. Claude가 스트리밍으로 응답하며, 마크다운/코드가 실시간 렌더링됩니다
-4. 응답 중 **Stop** 버튼 또는 **Esc**로 중단할 수 있습니다
+1. Launch the app to see the welcome screen
+2. Type a question or request in the input box and press **Enter** to send
+3. Claude responds via streaming with real-time markdown/code rendering
+4. Press **Stop** button or **Esc** to interrupt during streaming
 
-### 키보드 단축키
+### Keyboard Shortcuts
 
-| 단축키 | 동작 |
-|--------|------|
-| `Enter` | 메시지 전송 |
-| `Shift + Enter` | 줄바꿈 |
-| `Esc` | 스트리밍 중단 / 메뉴 닫기 |
-| `Ctrl + N` | 새 대화 |
-| `Ctrl + P` | 새 프로젝트 열기 |
-| `Ctrl + B` | 사이드바 토글 |
-| `Ctrl + L` | 입력창 포커스 |
+| Shortcut | Action |
+|----------|--------|
+| `Enter` | Send message |
+| `Shift + Enter` | New line |
+| `Esc` | Stop streaming / Close menu |
+| `Ctrl + N` | New conversation |
+| `Ctrl + P` | Open new project |
+| `Ctrl + B` | Toggle sidebar |
+| `Ctrl + L` | Focus input |
 
-### 파일 첨부
+### File Attachments
 
-입력창 옆 **첨부** 버튼으로 파일을 추가할 수 있습니다.
+Use the **Attach** button next to the input box to add files.
 
-- 이미지: PNG, JPG, GIF, WebP, SVG 등 (20MB 이하)
-- PDF (10MB 이하)
-- 문서: DOC, DOCX, XLS, XLSX, PPT 등
-- 텍스트 파일 (180KB 이하)
-- 압축 파일: ZIP, TAR, 7Z 등
+- Images: PNG, JPG, GIF, WebP, SVG, etc. (under 20MB)
+- PDF (under 10MB)
+- Documents: DOC, DOCX, XLS, XLSX, PPT, etc.
+- Text files (under 180KB)
+- Archives: ZIP, TAR, 7Z, etc.
 
-또는 입력창에 `@파일경로`를 입력하여 파일 내용을 직접 불러올 수 있습니다.
+You can also type `@filepath` in the input to load file contents directly.
 
-### 슬래시 명령어
+### Slash Commands
 
-입력창에 `/`를 입력하면 사용 가능한 명령어 목록이 표시됩니다.
+Type `/` in the input box to see the available command list.
 
-| 명령어 | 설명 |
-|--------|------|
-| `/model [이름]` | 모델 변경 (opus, sonnet, haiku 등) |
-| `/reasoning [low\|medium\|high\|max]` | 추론 수준 설정 |
-| `/sandbox [모드]` | 샌드박스 모드 변경 |
-| `/review` | 커밋되지 않은 변경사항 코드 리뷰 |
-| `/search [쿼리]` | 웹 검색 활성화 질문 |
-| `/file [경로]` | 파일 내용 불러오기 |
-| `/compress` | 대화 컨텍스트 압축 |
-| `/clear` | 현재 대화 초기화 |
-| `/resume [세션ID]` | 이전 세션 이어하기 |
-| `/usage` | 토큰 사용량 확인 |
-| `/help` | 전체 명령어 목록 |
+| Command | Description |
+|---------|-------------|
+| `/model [name]` | Change model (opus, sonnet, haiku, etc.) |
+| `/reasoning [low\|medium\|high\|max]` | Set reasoning effort level |
+| `/sandbox [mode]` | Change sandbox mode |
+| `/review` | Code review uncommitted changes |
+| `/file [path]` | Load file contents |
+| `/compress` | Compress conversation context |
+| `/clear` | Clear current conversation |
+| `/resume [session-id]` | Resume a previous session |
+| `/usage` | Check token usage |
+| `/settings` | Open settings panel |
+| `/help` | Full command list |
 
-### 프로젝트 관리
+### Project Management
 
-- **사이드바**에서 프로젝트(작업 디렉토리)별로 대화를 관리합니다
-- `Ctrl + N`으로 새 프로젝트 폴더를 열 수 있습니다
-- 각 프로젝트 아래에 여러 대화를 생성하고 전환할 수 있습니다
+- The **sidebar** organizes conversations by project (working directory)
+- Press `Ctrl + N` to open a new project folder
+- Create and switch between multiple conversations under each project
 
-### 승인 정책
+### Approval Policies
 
-Claude가 파일 수정이나 명령 실행을 요청할 때 승인 정책에 따라 동작합니다.
+When Claude requests file modifications or command execution, behavior depends on the approval policy.
 
-| 정책 | 동작 |
-|------|------|
-| 기본(default) | 매번 확인 요청 |
-| 편집 허용(acceptEdits) | 파일 편집 자동 승인 |
-| 자동(auto) | 안전한 작업 자동 승인 |
-| 전체 허용(bypassPermissions) | 모든 작업 자동 승인 |
-| 계획만(plan) | 계획만 표시, 실행 안 함 |
+| Policy | Behavior |
+|--------|----------|
+| Default | Confirm every action |
+| Accept Edits | Auto-approve file edits |
+| Auto | Auto-approve safe operations |
+| Bypass Permissions | Auto-approve everything |
+| Plan | Show plan only, no execution |
 
-하단 상태바에서 현재 정책을 확인하고 변경할 수 있습니다.
+Check and change the current policy from the bottom status bar.
 
-### 서브에이전트
+### Subagents
 
-`/subagent [이름] [프롬프트]` 또는 `/auto-agent [작업설명]`으로 병렬 에이전트를 생성하여 작업을 분배할 수 있습니다.
+Use `/subagent [name] [prompt]` or `/auto-agent [task]` to create parallel agents and distribute work. Subagent activity is displayed in a dedicated side panel with real-time progress tracking.
 
-### Git 연동
+### Settings
 
-입력창 옆 **커밋** 버튼으로 AI가 생성한 커밋 메시지와 함께 변경사항을 커밋할 수 있습니다. `/review` 명령어로 코드 리뷰도 가능합니다.
+Open via the **Settings** button in the sidebar or `/settings` command. Manage:
 
-## 라이선스
+- **General**: UI language (Korean/English), model, effort level, thinking, fast mode
+- **Permissions**: Allow/deny/ask rules
+- **Plugins**: Enable/disable plugins
+- **Hooks**: Pre/PostToolUse, Stop, SessionStart, etc.
+- **Advanced**: Environment variables, cleanup period, gitignore
+
+### Git Integration
+
+Use the **Commit** button next to the input to commit changes with an AI-generated commit message. Use `/review` for code review.
+
+## License
 
 MIT
