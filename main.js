@@ -1265,18 +1265,28 @@ function fetchUsageViaPty() {
         cwd: workingDirectory || process.cwd(),
         env: process.env,
       });
-      shell.onData(d => { output += d; });
-      // 6초 후 /usage 전송
-      setTimeout(() => { try { shell.write('/usage\r'); } catch (_) {} }, 5000);
+      let usageSent = false;
+      shell.onData(d => {
+        output += d;
+        // Claude CLI 준비 감지: 프롬프트 출력 시 즉시 /usage 전송
+        if (!usageSent && (output.includes('>') || output.includes('$') || output.includes('\u276f'))) {
+          usageSent = true;
+          setTimeout(() => { try { shell.write('/usage\r'); } catch (_) {} }, 500);
+        }
+      });
+      // 폴백: 3초 후에도 프롬프트 미감지 시 강제 전송
+      setTimeout(() => {
+        if (!usageSent) { usageSent = true; try { shell.write('/usage\r'); } catch (_) {} }
+      }, 3000);
       // usage 데이터 감지
       const checkInterval = setInterval(() => {
         if (output.includes('% used') && (output.includes('Extra usage') || output.includes('Current week'))) {
           clearInterval(checkInterval);
-          setTimeout(finish, 2000);
+          setTimeout(finish, 1000);
         }
-      }, 300);
-      // 최대 20초 타임아웃
-      setTimeout(() => { clearInterval(checkInterval); finish(); }, 20000);
+      }, 200);
+      // 최대 15초 타임아웃
+      setTimeout(() => { clearInterval(checkInterval); finish(); }, 15000);
     } catch (e) {
       usageFetchInProgress = false;
       resolve(null);

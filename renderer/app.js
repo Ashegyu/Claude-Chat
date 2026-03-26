@@ -7901,11 +7901,40 @@ ${userPrompt}
 
   function renderStreamingResponsePreview(containerEl, responseText, progressLines, visibleLines = STREAM_INLINE_PROGRESS_VISIBLE_LINES, options = {}) {
     if (!containerEl) return;
-    const scrollState = captureInlineProgressScrollState(containerEl);
-    const streamScrollState = captureStreamingScrollState(containerEl);
-    containerEl.innerHTML = renderStreamingResponseWithProgress(responseText, progressLines, visibleLines, options);
-    restoreInlineProgressScrollState(containerEl, scrollState);
-    restoreStreamingScrollState(containerEl, streamScrollState);
+    const subagentHtml = options.subagentHtml || '';
+    const hasSubagents = !!subagentHtml;
+
+    if (hasSubagents) {
+      // 그리드 레이아웃: 좌=본 에이전트, 우=서브에이전트
+      let grid = containerEl.querySelector('.stream-grid');
+      if (!grid) {
+        containerEl.innerHTML = '<div class="stream-grid"><div class="stream-main-col"></div><div class="stream-subagent-col"></div></div>';
+        grid = containerEl.querySelector('.stream-grid');
+      }
+      const mainCol = grid.querySelector('.stream-main-col');
+      const subCol = grid.querySelector('.stream-subagent-col');
+
+      const scrollState = captureInlineProgressScrollState(mainCol);
+      const streamScrollState = captureStreamingScrollState(mainCol);
+      mainCol.innerHTML = renderStreamingResponseWithProgress(responseText, progressLines, visibleLines, options);
+      restoreInlineProgressScrollState(mainCol, scrollState);
+      restoreStreamingScrollState(mainCol, streamScrollState);
+
+      // 서브에이전트 열 스크롤 보존
+      const subScroll = subCol.scrollTop;
+      const subNearBottom = (subCol.scrollHeight - subCol.scrollTop - subCol.clientHeight) <= 4;
+      subCol.innerHTML = subagentHtml;
+      subCol.scrollTop = subNearBottom ? subCol.scrollHeight : subScroll;
+      // 텍스트 블록 자동 하단 스크롤
+      subCol.querySelectorAll('.sa-text-content').forEach(el => { el.scrollTop = el.scrollHeight; });
+    } else {
+      // 기존 단일 열 레이아웃
+      const scrollState = captureInlineProgressScrollState(containerEl);
+      const streamScrollState = captureStreamingScrollState(containerEl);
+      containerEl.innerHTML = renderStreamingResponseWithProgress(responseText, progressLines, visibleLines, options);
+      restoreInlineProgressScrollState(containerEl, scrollState);
+      restoreStreamingScrollState(containerEl, streamScrollState);
+    }
   }
 
   function normalizeDetailLine(line) {
@@ -9133,6 +9162,84 @@ ${userPrompt}
     return { currentTab };
   }
 
+  function renderFinalSubagentSidePanel(events) {
+    if (!Array.isArray(events) || events.length === 0) return '';
+    const panels = [];
+    for (let i = 0; i < events.length; i++) {
+      const ev = events[i];
+      if (ev.type !== 'tool-use' || !/^Agent$/i.test(ev.name || '')) continue;
+      let desc = '', prompt = '';
+      try { const p = JSON.parse(ev.input || '{}'); desc = p.description || ''; prompt = p.prompt || ''; } catch {}
+      const results = [];
+      while (i + 1 < events.length && events[i + 1].type === 'tool-result') {
+        results.push(events[++i]);
+      }
+      const resultText = results.map(r => r.text || '').join('\n').trim();
+      const resultPreview = escapeHtmlLite(resultText.slice(0, 600));
+      const promptPreview = escapeHtmlLite((prompt || '').split('\n')[0].slice(0, 100));
+      panels.push(`<details class="subagent-side-item" open>
+        <summary class="subagent-side-summary">
+          <span class="subagent-side-dot done"></span>
+          <span class="subagent-side-title">${escapeHtmlLite(desc || 'Subagent')}</span>
+        </summary>
+        <div class="subagent-side-body">
+          ${promptPreview ? `<div class="subagent-prompt-preview">${promptPreview}</div>` : ''}
+          <pre class="claude-event-pre">${resultPreview}${resultText.length > 600 ? '\n...' : ''}</pre>
+        </div>
+      </details>`);
+    }
+    if (panels.length === 0) return '';
+    return `<div class="subagent-side-header">Subagents (${panels.length})</div>${panels.join('')}`;
+  }
+
+  function renderLiveSubagentPanels(events, activeSubagents) {
+    if (!Array.isArray(activeSubagents) || activeSubagents.length === 0) return '';
+    return activeSubagents.map(sa => {
+      const statusClass = sa.done ? 'sa-done' : 'sa-running';
+      const statusText = sa.done ? 'completed' : 'running...';
+      // 자식 이벤트로 진행 상황 표시
+      let childHtml = '';
+      if (sa.childEvents.length > 0) {
+        const items = sa.childEvents.slice(-8).map(ev => {
+          if (ev.type === 'thinking') {
+            const line = (ev.text || '').split('\n').pop().slice(0, 80);
+            return `<div class="sa-child-item sa-thinking"><span class="sa-child-icon">💭</span>${escapeHtmlLite(line)}</div>`;
+          }
+          if (ev.type === 'tool-use') {
+            return `<div class="sa-child-item sa-tool"><span class="sa-child-icon">🔧</span><strong>${escapeHtmlLite(ev.name || 'tool')}</strong></div>`;
+          }
+          if (ev.type === 'tool-result') {
+            const line = (ev.text || '').split('\n')[0].slice(0, 60);
+            return `<div class="sa-child-item sa-result"><span class="sa-child-icon">✓</span>${escapeHtmlLite(line)}</div>`;
+          }
+          if (ev.type === 'progress') {
+            return `<div class="sa-child-item sa-progress"><span class="sa-child-icon">›</span>${escapeHtmlLite((ev.text || '').slice(0, 80))}</div>`;
+          }
+          if (ev.type === 'text') {
+            const text = escapeHtmlLite(ev.text || '');
+            return `<div class="sa-text-block"><pre class="sa-text-content">${text}</pre></div>`;
+          }
+          return '';
+        }).join('');
+        childHtml = `<div class="sa-children">${items}</div>`;
+      } else if (!sa.done) {
+        childHtml = '<div class="sa-children"><div class="sa-child-item sa-waiting">작업 준비 중...</div></div>';
+      }
+      if (sa.done && sa.result) {
+        const preview = escapeHtmlLite((sa.result || '').split('\n')[0].slice(0, 100));
+        childHtml += `<div class="sa-result-preview">${preview}</div>`;
+      }
+      return `<div class="live-subagent-panel ${statusClass}">
+        <div class="live-subagent-header">
+          <span class="live-subagent-dot"></span>
+          <span class="live-subagent-title">${escapeHtmlLite(sa.desc || 'Subagent')}</span>
+          <span class="live-subagent-status">${statusText}</span>
+        </div>
+        ${childHtml}
+      </div>`;
+    }).join('');
+  }
+
   function renderClaudeEventsPanel(events) {
     if (!Array.isArray(events) || events.length === 0) return '';
 
@@ -9285,9 +9392,13 @@ ${userPrompt}
     if (!html) html = renderMarkdown(displayContent);
 
     // Claude CLI 이벤트 접이식 패널 추가
+    let eventsHtml = '';
+    let subagentSideHtml = '';
     if (Array.isArray(msg.claudeEvents) && msg.claudeEvents.length > 0) {
-      html = renderClaudeEventsPanel(msg.claudeEvents) + html;
+      eventsHtml = renderClaudeEventsPanel(msg.claudeEvents);
+      subagentSideHtml = renderFinalSubagentSidePanel(msg.claudeEvents);
     }
+    html = eventsHtml + html;
 
     // 중간 답변 접이식 패널 (답변 아래)
     if (Array.isArray(msg.intermediateTexts) && msg.intermediateTexts.length > 0) {
@@ -9306,6 +9417,11 @@ ${userPrompt}
         <summary class="claude-events-summary">중간 답변 (${msg.intermediateTexts.length}개)</summary>
         <div class="process-stack">${intermediateItems}</div>
       </details>`;
+    }
+
+    // 서브에이전트가 있으면 그리드 레이아웃
+    if (subagentSideHtml) {
+      html = `<div class="stream-grid final-grid"><div class="stream-main-col">${html}</div><div class="stream-subagent-col">${subagentSideHtml}</div></div>`;
     }
 
     setCachedRender(cacheKey, html);
@@ -10104,6 +10220,8 @@ ${userPrompt}
       // 중간 답변 텍스트 추적
       intermediateTexts: [],
       lastIntermediateOffset: 0,
+      // 서브에이전트 추적: { toolId, desc, childEvents: [{type,name,input,text}], done }
+      activeSubagents: [],
     };
     convStreams.set(convId, streamState);
 
@@ -10220,18 +10338,19 @@ ${userPrompt}
         const progressLines = updateStreamingPreviewLines(previewState, fullOutput, sections);
         // 중간 답변 이후의 현재 답변만 프리뷰에 표시
         const currentText = fullOutput.slice(streamState.lastIntermediateOffset).trim();
+        const liveSubagentHtml = renderLiveSubagentPanels(streamState.claudeEvents, streamState.activeSubagents);
         renderStreamingResponsePreview(
           liveBody,
           currentText,
           progressLines,
           STREAM_INLINE_PROGRESS_VISIBLE_LINES,
-          { showProgress: true, skipPreprocess: true, intermediateTexts: streamState.intermediateTexts }
+          { showProgress: true, skipPreprocess: true, intermediateTexts: streamState.intermediateTexts, subagentHtml: liveSubagentHtml }
         );
         scrollToBottom();
       }
     });
 
-    const unsubStream = window.electronAPI.cli.onStream(({ id, chunk, type, replace, usage: evtUsage, modelUsage: evtModelUsage, sessionUsage: evtSessionUsage }) => {
+    const unsubStream = window.electronAPI.cli.onStream(({ id, chunk, type, replace, usage: evtUsage, modelUsage: evtModelUsage, sessionUsage: evtSessionUsage, toolName: evtToolName, toolInput: evtToolInput, toolId: evtToolId }) => {
       if (id !== streamId || finished) return;
       // 턴 사이: 세션 ID만 캡처하고 나머지 무시
       if (streamState.betweenTurns) {
@@ -10249,6 +10368,16 @@ ${userPrompt}
           if (normalized && normalized !== previewState.lastTransientLine) {
             previewState.lastTransientLine = normalized;
             pushStreamingPreviewLine(previewState, normalized);
+            // 활성 서브에이전트에 진행 상황 추가
+            const activeSAProgress = streamState.activeSubagents.find(sa => !sa.done);
+            if (activeSAProgress) {
+              const lastChild = activeSAProgress.childEvents[activeSAProgress.childEvents.length - 1];
+              if (!lastChild || lastChild.type !== 'progress' || lastChild.text !== normalized) {
+                activeSAProgress.childEvents.push({ type: 'progress', text: normalized });
+                // 최대 20개까지만 유지
+                if (activeSAProgress.childEvents.length > 20) activeSAProgress.childEvents.splice(0, activeSAProgress.childEvents.length - 20);
+              }
+            }
           }
         }
         scheduleStreamRender();
@@ -10259,12 +10388,20 @@ ${userPrompt}
       if (type === 'thinking' || type === 'tool-use' || type === 'tool-result') {
         const chunkText = String(chunk || '').trim();
         if (chunkText) {
+          // 현재 활성 서브에이전트 (마지막 미완료 Agent)
+          const activeSA = streamState.activeSubagents.find(sa => !sa.done);
+
           if (type === 'thinking') {
             const last = streamState.claudeEvents[streamState.claudeEvents.length - 1];
             if (last && last.type === 'thinking') {
               last.text += '\n' + chunkText;
             } else {
               streamState.claudeEvents.push({ type: 'thinking', text: chunkText });
+            }
+            if (activeSA) {
+              const lastChild = activeSA.childEvents[activeSA.childEvents.length - 1];
+              if (lastChild && lastChild.type === 'thinking') { lastChild.text += '\n' + chunkText; }
+              else { activeSA.childEvents.push({ type: 'thinking', text: chunkText }); }
             }
             const lines = chunkText.split(/\r?\n/).filter(Boolean);
             pushStreamingPreviewLine(previewState, `[thinking] ${lines[lines.length - 1] || chunkText}`);
@@ -10275,22 +10412,50 @@ ${userPrompt}
               streamState.intermediateTexts.push(newText);
             }
             streamState.lastIntermediateOffset = fullOutput.length;
-            let toolName = '', toolInput = chunkText;
-            try {
-              const parsed = JSON.parse(chunkText);
-              toolName = parsed.name || parsed.tool_name || '';
-              toolInput = JSON.stringify(parsed.input || parsed.arguments || parsed, null, 2);
-            } catch { /* not json */ }
+            let toolName = evtToolName || '', toolInput = '';
+            if (evtToolInput) {
+              toolInput = typeof evtToolInput === 'string' ? evtToolInput : JSON.stringify(evtToolInput, null, 2);
+            } else {
+              toolInput = chunkText;
+              try {
+                const parsed = JSON.parse(chunkText);
+                toolName = toolName || parsed.name || parsed.tool_name || '';
+                toolInput = JSON.stringify(parsed.input || parsed.arguments || parsed, null, 2);
+              } catch { /* not json */ }
+            }
             streamState.claudeEvents.push({ type: 'tool-use', name: toolName, input: toolInput });
             if (/^Agent$/i.test(toolName)) {
               let agentDesc = '';
-              try { agentDesc = JSON.parse(toolInput).description || ''; } catch {}
+              try { const p = typeof evtToolInput === 'object' ? evtToolInput : JSON.parse(toolInput); agentDesc = p.description || ''; } catch {}
+              streamState.activeSubagents.push({ toolId: evtToolId || '', desc: agentDesc, childEvents: [], done: false });
               pushStreamingPreviewLine(previewState, `[subagent] ${agentDesc || 'Subagent 작업 시작'}`);
             } else {
+              // 서브에이전트 내부 도구 사용 추적
+              if (activeSA) {
+                activeSA.childEvents.push({ type: 'tool-use', name: toolName, input: toolInput });
+              }
               pushStreamingPreviewLine(previewState, `[tool] ${toolName || 'tool'}${toolName ? ': ' : ' '}${compactPreviewText(toolInput, 200)}`);
             }
           } else {
             streamState.claudeEvents.push({ type: 'tool-result', text: chunkText });
+            // Agent의 tool-result인지 확인 (toolId 매칭 또는 직전이 Agent tool-use)
+            const matchById = evtToolId && streamState.activeSubagents.find(sa => !sa.done && sa.toolId === evtToolId);
+            if (matchById) {
+              matchById.done = true;
+              matchById.result = chunkText;
+            } else {
+              const activeSAForResult = streamState.activeSubagents.find(sa => !sa.done);
+              if (activeSAForResult) {
+                // 직전 이벤트가 Agent tool-use이면 이 result는 Agent 결과
+                const prevEv = streamState.claudeEvents[streamState.claudeEvents.length - 2];
+                if (prevEv?.type === 'tool-use' && /^Agent$/i.test(prevEv.name || '')) {
+                  activeSAForResult.done = true;
+                  activeSAForResult.result = chunkText;
+                } else {
+                  activeSAForResult.childEvents.push({ type: 'tool-result', text: chunkText });
+                }
+              }
+            }
             pushStreamingPreviewLine(previewState, `[result] ${compactPreviewText(chunkText, 200)}`);
           }
         }
@@ -10302,12 +10467,13 @@ ${userPrompt}
             renderThinkingLogLines(logEl, previewState.lines);
           } else {
             const currentText = fullOutput.slice(streamState.lastIntermediateOffset).trim();
+            const liveSubagentHtml = renderLiveSubagentPanels(streamState.claudeEvents, streamState.activeSubagents);
             renderStreamingResponsePreview(
               liveBody,
               currentText,
               previewState.lines,
               STREAM_INLINE_PROGRESS_VISIBLE_LINES,
-              { showProgress: true, skipPreprocess: true, intermediateTexts: streamState.intermediateTexts }
+              { showProgress: true, skipPreprocess: true, intermediateTexts: streamState.intermediateTexts, subagentHtml: liveSubagentHtml }
             );
             // 중간 답변 패널 스크롤을 아래로
             const panel = liveBody.querySelector('.stream-intermediate-panel');
@@ -10421,6 +10587,22 @@ ${userPrompt}
       fullOutput = appendStreamingChunk(fullOutput, chunk);
       streamState.currentAiMsg.content = fullOutput;
       applyRealtimeRateLimitFromChunk(streamState, chunk);
+      // 활성 서브에이전트에 텍스트 출력 추적
+      const activeSAText = streamState.activeSubagents.find(sa => !sa.done);
+      if (activeSAText) {
+        const text = String(chunk || '').trim();
+        if (text) {
+          const lastChild = activeSAText.childEvents[activeSAText.childEvents.length - 1];
+          if (lastChild && lastChild.type === 'text') {
+            lastChild.text += '\n' + text;
+            // 너무 길면 앞부분 자르기
+            if (lastChild.text.length > 3000) lastChild.text = lastChild.text.slice(-2500);
+          } else {
+            activeSAText.childEvents.push({ type: 'text', text });
+          }
+          if (activeSAText.childEvents.length > 25) activeSAText.childEvents.splice(0, activeSAText.childEvents.length - 25);
+        }
+      }
       autoSaveIfNeeded();
 
       // Claude 내부 에이전트 활동 감지
