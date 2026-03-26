@@ -1256,6 +1256,7 @@ function fetchUsageViaPty() {
         .replace(/\x1b[>=>\[>][0-9]*[a-zA-Z]?/g, '')
         .replace(/\x1b\([A-Z0-9]/g, '');
       const result = parseUsageText(clean);
+      console.log('[usage-pty] parse result:', result ? JSON.stringify(result) : 'null (raw tail: ' + clean.slice(-200) + ')');
       if (result) cachedUsageData = result;
       resolve(cachedUsageData);
     };
@@ -1266,27 +1267,58 @@ function fetchUsageViaPty() {
         env: process.env,
       });
       let usageSent = false;
+      let dataChunks = 0;
       shell.onData(d => {
         output += d;
-        // Claude CLI 준비 감지: 프롬프트 출력 시 즉시 /usage 전송
-        if (!usageSent && (output.includes('>') || output.includes('$') || output.includes('\u276f'))) {
-          usageSent = true;
-          setTimeout(() => { try { shell.write('/usage\r'); } catch (_) {} }, 500);
+        dataChunks++;
+        if (!usageSent && dataChunks > 5) {
+          const clean = output
+            .replace(/\x1b\[\d*C/g, ' ')
+            .replace(/\x1b\[[0-9;]*[a-zA-ZH]/g, '')
+            .replace(/\x1b\][^\x07]*\x07/g, '')
+            .replace(/\x1b\[\?[0-9;]*[hl]/g, '')
+            .replace(/\x1b[>=>\[>][0-9]*[a-zA-Z]?/g, '')
+            .replace(/\x1b\([A-Z0-9]/g, '');
+          const tail = clean.slice(-200);
+          // Claude CLI 프롬프트: ❯, >, tips, "How can I help" 등
+          if (/[\u276f❯]\s*$/.test(tail) || />\s*$/.test(tail) || /tips\s*$/i.test(tail) || /help\s*you/i.test(tail) || /\?\s*$/.test(tail)) {
+            usageSent = true;
+            console.log('[usage-pty] prompt detected at chunk', dataChunks);
+            setTimeout(() => { try { shell.write('/usage\r'); } catch (_) {} }, 500);
+          }
         }
       });
-      // 폴백: 3초 후에도 프롬프트 미감지 시 강제 전송
+      // 폴백: 6초 후에도 프롬프트 미감지 시 강제 전송
       setTimeout(() => {
-        if (!usageSent) { usageSent = true; try { shell.write('/usage\r'); } catch (_) {} }
-      }, 3000);
-      // usage 데이터 감지
+        if (!usageSent) {
+          usageSent = true;
+          console.log('[usage-pty] fallback: sending /usage after 6s, chunks:', dataChunks);
+          try { shell.write('/usage\r'); } catch (_) {}
+        }
+      }, 6000);
+      // usage 데이터 감지 - ANSI 제거 후 확인
       const checkInterval = setInterval(() => {
-        if (output.includes('% used') && (output.includes('Extra usage') || output.includes('Current week'))) {
+        const cleanCheck = output
+          .replace(/\x1b\[\d*C/g, ' ')
+          .replace(/\x1b\[[0-9;]*[a-zA-ZH]/g, '')
+          .replace(/\x1b\][^\x07]*\x07/g, '')
+          .replace(/\x1b\[\?[0-9;]*[hl]/g, '')
+          .replace(/\x1b[>=>\[>][0-9]*[a-zA-Z]?/g, '')
+          .replace(/\x1b\([A-Z0-9]/g, '');
+        // "% used" 또는 "% " + "session"/"week" 조합 (ANSI 코드가 사이에 들어올 수 있음)
+        if ((/\d+%\s*used/i.test(cleanCheck) || /\d+%/.test(cleanCheck)) &&
+            (/Extra usage|Current week|Current session|Resets?/i.test(cleanCheck))) {
           clearInterval(checkInterval);
+          console.log('[usage-pty] usage data detected, finishing in 1s');
           setTimeout(finish, 1000);
         }
-      }, 200);
-      // 최대 15초 타임아웃
-      setTimeout(() => { clearInterval(checkInterval); finish(); }, 15000);
+      }, 300);
+      // /usage 전송 후 12초 내 응답 없으면 강제 종료 (결과가 있으면 파싱됨)
+      setTimeout(() => {
+        console.log('[usage-pty] timeout reached, finishing. output length:', output.length);
+        clearInterval(checkInterval);
+        finish();
+      }, usageSent ? 15000 : 20000);
     } catch (e) {
       usageFetchInProgress = false;
       resolve(null);

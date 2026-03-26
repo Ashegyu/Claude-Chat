@@ -9,6 +9,75 @@
     try { console.error('[renderer-rejection]', event?.reason || event); } catch { /* ignore */ }
   });
 
+  // i18n 헬퍼 (window.i18n.t의 로컬 단축키)
+  const t = window.i18n ? window.i18n.t : (key) => key;
+
+  // DOM 한국어 텍스트를 현재 언어로 교체
+  function applyI18nToDOM() {
+    const map = {
+      '#btn-sidebar-toggle': { title: 'sidebar.toggle', aria: 'sidebar.toggle' },
+      '#btn-open-project': { text: 'sidebar.newProject', keepSvg: true },
+      '#profile-section .section-label': { text: 'sidebar.aiProfile' },
+      '#project-section .section-label': { text: 'sidebar.projectList' },
+      '#cwd-section .section-label': { text: 'sidebar.selectedProject' },
+      '#btn-cwd': { title: 'sidebar.openProject' },
+      '#cwd-path': { text: 'sidebar.selectProject' },
+      '#btn-settings': { text: 'sidebar.settings' },
+      '#btn-clear-all': { text: 'sidebar.clearAll' },
+      '#btn-user-manual': { text: 'sidebar.manual' },
+      '#app-version': { text: 'sidebar.versionLoading' },
+      '#sidebar-resizer': { aria: 'sidebar.resizer' },
+      '#welcome p': { html: 'welcome.title' },
+      '#btn-scroll-top': { title: 'input.scrollTop' },
+      '#btn-attach': { title: 'input.attachFile' },
+      '#btn-commit': { title: 'input.commit' },
+      '#prompt-input': { placeholder: 'input.placeholder' },
+      '#btn-send': { title: 'input.send' },
+      '#btn-stop': { title: 'input.stop' },
+      '#slash-command-menu': { aria: 'input.slashMenu' },
+      '#session-picker': { aria: 'input.sessionList' },
+      '#input-cwd-display': { title: 'input.cwdChange' },
+      '#context-compress-hint': { title: 'input.contextCompress' },
+      '#btn-subagent-autoclose': { title: 'input.agentAutoClose', text: 'input.agentKeep' },
+      '#runtime-selector-menu': { aria: 'input.runtimeMenu' },
+    };
+    for (const [sel, ops] of Object.entries(map)) {
+      const el = document.querySelector(sel);
+      if (!el) continue;
+      if (ops.title) el.title = t(ops.title);
+      if (ops.aria) el.setAttribute('aria-label', t(ops.aria));
+      if (ops.placeholder) el.placeholder = t(ops.placeholder);
+      if (ops.html) el.innerHTML = t(ops.html);
+      if (ops.text) {
+        if (ops.keepSvg) {
+          const svg = el.querySelector('svg');
+          el.textContent = '';
+          if (svg) el.appendChild(svg);
+          el.append(' ' + t(ops.text));
+        } else {
+          el.textContent = t(ops.text);
+        }
+      }
+    }
+    // 힌트 칩
+    const chips = document.querySelectorAll('.hint-chip');
+    const chipKeys = ['fileStructure', 'pythonServer', 'gitBranch', 'refactor'];
+    chips.forEach((chip, i) => {
+      const key = chipKeys[i];
+      if (!key) return;
+      chip.textContent = t('welcome.chip.' + key);
+      chip.dataset.prompt = t('welcome.chip.' + key + '.prompt');
+    });
+    // 힌트 줄
+    const hintSpans = document.querySelectorAll('#input-hint > span:not(.sep):not(.cwd-hint):not(#current-profile-name)');
+    hintSpans.forEach(sp => {
+      if (sp.id) return; // skip named spans
+      if (/Enter|Shift|@|\//.test(sp.textContent)) sp.textContent = t('input.hint');
+    });
+  }
+
+  applyI18nToDOM();
+
   function normalizeConversations(parsed) {
     if (!Array.isArray(parsed)) return [];
     const normalized = [];
@@ -767,53 +836,46 @@
   const $appVersion = document.getElementById('app-version');
   const $btnUserManual = document.getElementById('btn-user-manual');
 
-  const SLASH_COMMANDS = [
-    // --- Claude 실행 ---
-{ command: '/review', description: '코드 리뷰 (uncommitted)', usage: '/review [지시사항]' },
-    { command: '/review-base', description: '브랜치 기준 코드 리뷰', usage: '/review-base [브랜치] [지시]' },
-    { command: '/review-commit', description: '커밋 리뷰', usage: '/review-commit [SHA]' },
-    { command: '/apply', description: 'Claude diff를 git apply', usage: '/apply [task-id]' },
-    // --- Claude 세션 ---
-    { command: '/resume', description: '이전 세션 이어서 실행 (인자 없으면 목록 표시)', usage: '/resume [session-id]' },
-    { command: '/resume-raw', description: '원본 로그 전체 복원 (commentary/메타 포함)', usage: '/resume-raw [session-id]' },
-    { command: '/fork', description: '이전 세션 복제 후 실행', usage: '/fork [session-id]' },
-    // --- MCP ---
-    { command: '/mcp-list', description: 'MCP 서버 목록', usage: '/mcp-list' },
-    { command: '/mcp-add', description: 'MCP 서버 추가', usage: '/mcp-add [이름] [--url URL | -- 명령어]' },
-    { command: '/mcp-remove', description: 'MCP 서버 제거', usage: '/mcp-remove [이름]' },
-    // --- Cloud (실험적) ---
-    { command: '/cloud-exec', description: 'Cloud 태스크 생성', usage: '/cloud-exec --env [ENV] [질문]' },
-    { command: '/cloud-list', description: 'Cloud 태스크 목록', usage: '/cloud-list [--env ENV]' },
-    { command: '/cloud-status', description: 'Cloud 태스크 상태', usage: '/cloud-status [task-id]' },
-    { command: '/cloud-diff', description: 'Cloud 태스크 diff', usage: '/cloud-diff [task-id]' },
-    { command: '/cloud-apply', description: 'Cloud 태스크 diff 적용', usage: '/cloud-apply [task-id]' },
-    // --- 인증 ---
-    { command: '/login', description: '로그인 상태 확인', usage: '/login' },
-    { command: '/logout', description: '인증 정보 제거', usage: '/logout' },
-    // --- 설정 ---
-    { command: '/model', description: '모델 변경', usage: '/model [모델명]' },
-    { command: '/reasoning', description: 'Reasoning effort 변경', usage: '/reasoning [low|medium|high|max]' },
-    { command: '/sandbox', description: '샌드박스 모드 변경', usage: '/sandbox [read-only|workspace-write|danger-full-access]' },
-    { command: '/cwd', description: '작업 폴더 변경', usage: '/cwd [경로]' },
-    // --- 앱 기능 ---
-    { command: '/file', description: '파일 불러오기', usage: '/file [경로]' },
-    { command: '/usage', description: '5h/weekly 사용량 갱신', usage: '/usage' },
-    { command: '/clear', description: '현재 대화 초기화', usage: '/clear' },
-    { command: '/compress', description: '현재 대화 컨텍스트 압축', usage: '/compress' },
-    { command: '/concise', description: '간결 모드 토글 (토큰 절약)', usage: '/concise [on|off]' },
-    { command: '/context-limit', description: '자동 압축 메시지 수 설정', usage: '/context-limit [숫자]' },
-    { command: '/features', description: 'Claude CLI feature 목록', usage: '/features' },
-    { command: '/version', description: 'Claude CLI 버전', usage: '/version' },
-    { command: '/help', description: '명령어 목록', usage: '/help' },
-    { command: '/settings', description: 'Claude 설정 관리', usage: '/settings' },
-    // --- 서브에이전트 ---
-    // --- CLAUDE.md ---
-    { command: '/claude-md-improver', description: 'CLAUDE.md 감사 및 개선', usage: '/claude-md-improver' },
-    // --- 서브에이전트 ---
-    { command: '/subagent', description: '서브에이전트 생성 (병렬 실행)', usage: '/subagent [--auto-close] [에이전트명] [프롬프트]' },
-    { command: '/auto-agent', description: '작업 자동 분배 (AI가 에이전트 배정)', usage: '/auto-agent [작업 설명]' },
-    { command: '/agents', description: '사용 가능한 에이전트 목록', usage: '/agents' },
-  ];
+  function buildSlashCommands() {
+    return [
+      { command: '/review', get description() { return t('cmd.review.desc'); }, get usage() { return t('cmd.review.usage'); } },
+      { command: '/review-base', get description() { return t('cmd.reviewBase.desc'); }, get usage() { return t('cmd.reviewBase.usage'); } },
+      { command: '/review-commit', get description() { return t('cmd.reviewCommit.desc'); }, get usage() { return t('cmd.reviewCommit.usage'); } },
+      { command: '/apply', get description() { return t('cmd.apply.desc'); }, get usage() { return t('cmd.apply.usage'); } },
+      { command: '/resume', get description() { return t('cmd.resume.desc'); }, get usage() { return t('cmd.resume.usage'); } },
+      { command: '/resume-raw', get description() { return t('cmd.resumeRaw.desc'); }, get usage() { return t('cmd.resumeRaw.usage'); } },
+      { command: '/fork', get description() { return t('cmd.fork.desc'); }, get usage() { return t('cmd.fork.usage'); } },
+      { command: '/mcp-list', get description() { return t('cmd.mcpList.desc'); }, usage: '/mcp-list' },
+      { command: '/mcp-add', get description() { return t('cmd.mcpAdd.desc'); }, get usage() { return t('cmd.mcpAdd.usage'); } },
+      { command: '/mcp-remove', get description() { return t('cmd.mcpRemove.desc'); }, get usage() { return t('cmd.mcpRemove.usage'); } },
+      { command: '/cloud-exec', get description() { return t('cmd.cloudExec.desc'); }, get usage() { return t('cmd.cloudExec.usage'); } },
+      { command: '/cloud-list', get description() { return t('cmd.cloudList.desc'); }, get usage() { return t('cmd.cloudList.usage'); } },
+      { command: '/cloud-status', get description() { return t('cmd.cloudStatus.desc'); }, usage: '/cloud-status [task-id]' },
+      { command: '/cloud-diff', get description() { return t('cmd.cloudDiff.desc'); }, usage: '/cloud-diff [task-id]' },
+      { command: '/cloud-apply', get description() { return t('cmd.cloudApply.desc'); }, usage: '/cloud-apply [task-id]' },
+      { command: '/login', get description() { return t('cmd.login.desc'); }, usage: '/login' },
+      { command: '/logout', get description() { return t('cmd.logout.desc'); }, usage: '/logout' },
+      { command: '/model', get description() { return t('cmd.model.desc'); }, get usage() { return t('cmd.model.usage'); } },
+      { command: '/reasoning', get description() { return t('cmd.reasoning.desc'); }, usage: '/reasoning [low|medium|high|max]' },
+      { command: '/sandbox', get description() { return t('cmd.sandbox.desc'); }, usage: '/sandbox [read-only|workspace-write|danger-full-access]' },
+      { command: '/cwd', get description() { return t('cmd.cwd.desc'); }, get usage() { return t('cmd.cwd.usage'); } },
+      { command: '/file', get description() { return t('cmd.file.desc'); }, get usage() { return t('cmd.file.usage'); } },
+      { command: '/usage', get description() { return t('cmd.usage.desc'); }, usage: '/usage' },
+      { command: '/clear', get description() { return t('cmd.clear.desc'); }, usage: '/clear' },
+      { command: '/compress', get description() { return t('cmd.compress.desc'); }, usage: '/compress' },
+      { command: '/concise', get description() { return t('cmd.concise.desc'); }, usage: '/concise [on|off]' },
+      { command: '/context-limit', get description() { return t('cmd.contextLimit.desc'); }, get usage() { return t('cmd.contextLimit.usage'); } },
+      { command: '/features', get description() { return t('cmd.features.desc'); }, usage: '/features' },
+      { command: '/version', get description() { return t('cmd.version.desc'); }, usage: '/version' },
+      { command: '/help', get description() { return t('cmd.help.desc'); }, usage: '/help' },
+      { command: '/settings', get description() { return t('cmd.settings.desc'); }, usage: '/settings' },
+      { command: '/claude-md-improver', get description() { return t('cmd.claudeMd.desc'); }, usage: '/claude-md-improver' },
+      { command: '/subagent', get description() { return t('cmd.subagent.desc'); }, get usage() { return t('cmd.subagent.usage'); } },
+      { command: '/auto-agent', get description() { return t('cmd.autoAgent.desc'); }, get usage() { return t('cmd.autoAgent.usage'); } },
+      { command: '/agents', get description() { return t('cmd.agents.desc'); }, usage: '/agents' },
+    ];
+  }
+  const SLASH_COMMANDS = buildSlashCommands();
   // 기본 모델 목록 (드롭다운 빠른 선택용) + 커스텀 입력 지원
   const MODEL_OPTIONS = [
     { id: 'opus', cliModel: 'opus' },
@@ -2990,14 +3052,14 @@
     const argText = (commandMatch?.[2] || '').trim();
 
     if (command === '/usage') {
-      showSlashFeedback('Claude 사용량 상태를 갱신 중입니다...', false);
+      showSlashFeedback(t('usage.refreshing'), false);
       const refreshed = await refreshClaudeRateLimits('slash');
       if (refreshed?.skipped) {
-        showSlashFeedback('최근 10분 내 갱신되어 상태를 유지했습니다.', false);
+        showSlashFeedback(t('usage.recentRefresh'), false);
       } else if (refreshed?.success) {
-        showSlashFeedback('5h/weekly 사용량 상태를 갱신했습니다.', false);
+        showSlashFeedback(t('usage.refreshed'), false);
       } else {
-        showSlashFeedback('사용량 데이터가 아직 없습니다. 질문을 보낸 후 다시 시도해주세요.', true);
+        showSlashFeedback(t('usage.noData'), true);
       }
       return true;
     }
@@ -3046,7 +3108,7 @@
 
     if (command === '/review') {
       const reviewPrompt = argText || '';
-      showSlashFeedback('코드 리뷰를 시작합니다...', false);
+      showSlashFeedback(t('review.starting'), false);
       await runClaudeSubcommand('review', ['--uncommitted'], reviewPrompt);
       return true;
     }
@@ -3058,7 +3120,7 @@
     }
 
     if (command === '/claude-md-improver') {
-      showSlashFeedback('CLAUDE.md 감사 및 개선을 시작합니다...', false);
+      showSlashFeedback(t('misc.claudeMdImproving'), false);
       await runClaudeWithExtraArgs([], '/claude-md-improver', { forceNewSession: true });
       return true;
     }
@@ -3097,7 +3159,7 @@
         conv.messages = [];
         saveConversations();
         renderMessages();
-        showSlashFeedback('대화를 초기화했습니다.', false);
+        showSlashFeedback(t('conv.cleared'), false);
       }
       return true;
     }
@@ -11596,7 +11658,7 @@ ${userPrompt}
     if (existing) existing.remove();
 
     const res = await window.electronAPI.settings.load();
-    if (!res.success) { showSlashFeedback('설정 로드 실패: ' + res.error, true); return; }
+    if (!res.success) { showSlashFeedback(t('settings.loadFail') + ' ' + res.error, true); return; }
 
     const globalData = res.data.global || {};
     const localData = res.data.projectLocal || {};
@@ -11625,8 +11687,8 @@ ${userPrompt}
         <div class="settings-footer">
           <span class="settings-path"></span>
           <div class="settings-actions">
-            <button class="settings-btn-cancel">취소</button>
-            <button class="settings-btn-save">저장</button>
+            <button class="settings-btn-cancel">${t('settings.cancel')}</button>
+            <button class="settings-btn-save">${t('settings.save')}</button>
           </div>
         </div>
       </div>
@@ -11634,11 +11696,11 @@ ${userPrompt}
     document.body.appendChild(modal);
 
     const CATEGORIES = [
-      { id: 'general', label: '일반', icon: '\u2699' },
-      { id: 'permissions', label: '권한', icon: '\uD83D\uDD12' },
-      { id: 'plugins', label: '플러그인', icon: '\uD83E\uDDE9' },
-      { id: 'hooks', label: 'Hooks', icon: '\uD83E\uDE9D' },
-      { id: 'advanced', label: '고급', icon: '\uD83D\uDD27' },
+      { id: 'general', get label() { return t('settings.general'); }, icon: '\u2699' },
+      { id: 'permissions', get label() { return t('settings.permissions'); }, icon: '\uD83D\uDD12' },
+      { id: 'plugins', get label() { return t('settings.plugins'); }, icon: '\uD83E\uDDE9' },
+      { id: 'hooks', get label() { return t('settings.hooks'); }, icon: '\uD83E\uDE9D' },
+      { id: 'advanced', get label() { return t('settings.advanced'); }, icon: '\uD83D\uDD27' },
     ];
 
     const navEl = modal.querySelector('.settings-nav');
@@ -11687,27 +11749,29 @@ ${userPrompt}
       let html = '';
 
       if (activeCategory === 'general') {
-        html += field('언어', textInput('language', d.language, '예: 한국어, english'));
-        html += field('모델', textInput('model', d.model, '예: opus, sonnet, haiku'));
-        html += field('Effort Level', selectInput('effortLevel', d.effortLevel || '', [['', '기본'], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High']]));
-        html += field('업데이트 채널', selectInput('autoUpdatesChannel', d.autoUpdatesChannel || '', [['', '기본'], ['latest', 'Latest'], ['stable', 'Stable']]));
-        html += field('Always Thinking', toggle('alwaysThinkingEnabled', d.alwaysThinkingEnabled !== false), '지원 모델에서 thinking 활성화');
+        const curUiLang = window.i18n?.getLanguage() || 'ko';
+        html += field(t('settings.uiLanguage'), selectInput('_uiLanguage', curUiLang, [['ko', '한국어'], ['en', 'English']]));
+        html += field(t('settings.language'), textInput('language', d.language, t('settings.langExample')));
+        html += field(t('settings.model'), textInput('model', d.model, t('settings.modelExample')));
+        html += field(t('settings.effortLevel'), selectInput('effortLevel', d.effortLevel || '', [['', t('settings.default')], ['low', 'Low'], ['medium', 'Medium'], ['high', 'High'], ['max', 'Max']]), 'Extended Thinking budget (--effort)');
+        html += field(t('settings.updateChannel'), selectInput('autoUpdatesChannel', d.autoUpdatesChannel || '', [['', t('settings.default')], ['latest', 'Latest'], ['stable', 'Stable']]));
+        html += field(t('settings.alwaysThinking'), toggle('alwaysThinkingEnabled', d.alwaysThinkingEnabled !== false), t('settings.thinkingHint'));
         html += field('Fast Mode', toggle('fastMode', d.fastMode === true));
         html += field('Spinner Tips', toggle('spinnerTipsEnabled', d.spinnerTipsEnabled !== false));
-        html += field('구문 하이라이팅 비활성화', toggle('syntaxHighlightingDisabled', d.syntaxHighlightingDisabled === true));
+        html += field(t('settings.syntaxDisable'), toggle('syntaxHighlightingDisabled', d.syntaxHighlightingDisabled === true));
       }
 
       if (activeCategory === 'permissions') {
         const perms = d.permissions || {};
-        html += field('기본 모드', selectInput('permissions.defaultMode', perms.defaultMode || 'default', [['default', 'Default'], ['plan', 'Plan'], ['acceptEdits', 'Accept Edits'], ['dontAsk', "Don't Ask"], ['auto', 'Auto']]));
-        html += field('허용 (Allow)', listEditor('permissions.allow', perms.allow));
-        html += field('거부 (Deny)', listEditor('permissions.deny', perms.deny));
-        html += field('확인 (Ask)', listEditor('permissions.ask', perms.ask));
+        html += field(t('settings.defaultMode'), selectInput('permissions.defaultMode', perms.defaultMode || 'default', [['default', 'Default'], ['plan', 'Plan'], ['acceptEdits', 'Accept Edits'], ['dontAsk', "Don't Ask"], ['auto', 'Auto']]));
+        html += field(t('settings.allow'), listEditor('permissions.allow', perms.allow));
+        html += field(t('settings.deny'), listEditor('permissions.deny', perms.deny));
+        html += field(t('settings.ask'), listEditor('permissions.ask', perms.ask));
       }
 
       if (activeCategory === 'plugins') {
         const plugins = d.enabledPlugins || {};
-        html += '<div class="sf-section-title">활성화된 플러그인</div>';
+        html += '<div class="sf-section-title">' + t('settings.enabledPlugins') + '</div>';
         for (const [pluginId, enabled] of Object.entries(plugins)) {
           html += field(pluginId, toggle('plugin.' + pluginId, enabled));
         }
@@ -11716,9 +11780,9 @@ ${userPrompt}
 
       if (activeCategory === 'hooks') {
         const hooks = d.hooks || {};
-        html += '<div class="sf-section-title">등록된 Hooks</div>';
+        html += '<div class="sf-section-title">' + t('settings.registeredHooks') + '</div>';
         if (Object.keys(hooks).length === 0) {
-          html += '<div class="sf-empty">등록된 hook이 없습니다.</div>';
+          html += '<div class="sf-empty">' + t('settings.noHooks') + '</div>';
         }
         for (const [event, matchers] of Object.entries(hooks)) {
           for (let mi = 0; mi < matchers.length; mi++) {
@@ -11735,18 +11799,18 @@ ${userPrompt}
             }
           }
         }
-        html += '<div class="sf-section-title" style="margin-top:12px">Hook 추가</div>'
+        html += '<div class="sf-section-title" style="margin-top:12px">' + t('settings.addHook') + '</div>'
           + '<div class="sf-hook-add">'
-          + selectInput('_hookEvent', '', [['', '이벤트 선택'], ['PreToolUse','PreToolUse'], ['PostToolUse','PostToolUse'], ['Stop','Stop'], ['PreCompact','PreCompact'], ['PostCompact','PostCompact'], ['UserPromptSubmit','UserPromptSubmit'], ['SessionStart','SessionStart'], ['Notification','Notification']])
-          + textInput('_hookMatcher', '', 'Matcher (예: Bash|Write)')
+          + selectInput('_hookEvent', '', [['', t('settings.selectEvent')], ['PreToolUse','PreToolUse'], ['PostToolUse','PostToolUse'], ['Stop','Stop'], ['PreCompact','PreCompact'], ['PostCompact','PostCompact'], ['UserPromptSubmit','UserPromptSubmit'], ['SessionStart','SessionStart'], ['Notification','Notification']])
+          + textInput('_hookMatcher', '', t('settings.matcherPlaceholder'))
           + selectInput('_hookType', 'command', [['command','Command'], ['prompt','Prompt']])
-          + textInput('_hookCommand', '', '명령어 / 프롬프트')
-          + '<button class="sf-hook-add-btn">추가</button>'
+          + textInput('_hookCommand', '', t('settings.cmdPrompt'))
+          + '<button class="sf-hook-add-btn">' + t('settings.add') + '</button>'
           + '</div>';
       }
 
       if (activeCategory === 'advanced') {
-        html += '<div class="sf-section-title">환경 변수</div>';
+        html += '<div class="sf-section-title">' + t('settings.envVars') + '</div>';
         const env = d.env || {};
         for (const [k, v] of Object.entries(env)) {
           html += '<div class="sf-env-item"><code>' + k + '</code> = <input type="text" class="sf-input sf-env-val" data-env-key="' + k + '" value="' + v + '"><button class="sf-env-remove" data-env-key="' + k + '">&times;</button></div>';
@@ -11788,6 +11852,10 @@ ${userPrompt}
       contentEl.querySelectorAll('select.sf-select').forEach(el => {
         el.addEventListener('change', () => {
           const key = el.dataset.key;
+          if (key === '_uiLanguage') {
+            if (window.i18n) { window.i18n.setLanguage(el.value); applyI18nToDOM(); renderNav(); renderContent(); }
+            return;
+          }
           if (key.startsWith('_')) return;
           const val = el.value;
           if (val) setDeep(cur(), key, val); else deleteDeep(cur(), key);
@@ -11918,10 +11986,10 @@ ${userPrompt}
       const r1 = await window.electronAPI.settings.save('global', editData.global);
       const r2 = await window.electronAPI.settings.save('projectLocal', editData.projectLocal);
       if (r1.success && r2.success) {
-        showSlashFeedback('설정이 저장되었습니다.', false);
+        showSlashFeedback(t('settings.saved'), false);
         closeModal();
       } else {
-        showSlashFeedback('저장 실패: ' + (r1.error || r2.error), true);
+        showSlashFeedback(t('settings.saveFail') + ' ' + (r1.error || r2.error), true);
       }
     });
 
