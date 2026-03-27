@@ -172,3 +172,5 @@ Use the **Commit** button next to the input to commit changes with an AI-generat
 ## License
 
 MIT
+
+contact :worbswo@naver.com
