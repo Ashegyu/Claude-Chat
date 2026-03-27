@@ -882,7 +882,9 @@
     { id: 'sonnet', cliModel: 'sonnet' },
     { id: 'haiku', cliModel: 'haiku' },
     { id: 'claude-opus-4-6', cliModel: 'claude-opus-4-6' },
+    { id: 'claude-opus-4-6[1m]', cliModel: 'claude-opus-4-6[1m]' },
     { id: 'claude-sonnet-4-6', cliModel: 'claude-sonnet-4-6' },
+    { id: 'claude-sonnet-4-6[1m]', cliModel: 'claude-sonnet-4-6[1m]' },
     { id: 'claude-haiku-4-5', cliModel: 'claude-haiku-4-5-20251001' },
   ];
   const MODEL_OPTION_IDS = MODEL_OPTIONS.map(item => item.id);

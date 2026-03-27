@@ -698,9 +698,6 @@ ipcMain.handle('cli:run', (event, { id, profile, prompt, cwd }) => {
   // Build claude args
   const hasOutputFormat = baseArgs.some(a => a === '--output-format');
   const args = ['-p', '--verbose', ...(hasOutputFormat ? [] : ['--output-format', 'stream-json']), ...baseArgs];
-  if (promptText) {
-    args.push('--', promptText);
-  }
 
   console.log(`[CLI] run id=${id} shell=${profile.command} prompt=${promptText ? `${promptText.length} chars` : 'none'} args=${JSON.stringify(formatCliArgsForLog(args))} cwd=${runCwd}`);
 
@@ -719,7 +716,11 @@ ipcMain.handle('cli:run', (event, { id, profile, prompt, cwd }) => {
 
     runningProcesses.set(id, createProcessHandle('spawn', child));
 
-    // stdin을 즉시 닫아 -p 모드에서 프롬프트 처리가 시작되도록 함
+    // stdin으로 프롬프트 전달 후 닫아 -p 모드에서 프롬프트 처리가 시작되도록 함
+    // (커맨드 라인 인자 대신 stdin 사용 — shell: true 시 cmd.exe 특수문자 문제 방지)
+    if (promptText) {
+      child.stdin?.write(promptText);
+    }
     child.stdin?.end();
 
     let lineBuf = '';
