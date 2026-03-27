@@ -708,11 +708,12 @@ ipcMain.handle('cli:run', (event, { id, profile, prompt, cwd }) => {
     const env = { ...process.env, ...(profile.env || {}), CLAUDECODE: '' };
     const resolvedShell = resolveCliPath(profile.command);
 
+    const useShell = process.platform === 'win32' && resolvedShell.endsWith('.cmd');
     const child = spawn(resolvedShell, args, {
       cwd: runCwd,
       env,
       windowsHide: true,
-      shell: false,
+      shell: useShell,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
@@ -950,11 +951,12 @@ ${detailDiff}`;
     return new Promise((resolve) => {
       const execArgs = ['-p', '--output-format', 'json', '--model', 'haiku', '--', prompt];
 
+      const useShell = process.platform === 'win32' && claudePath.endsWith('.cmd');
       const spawnOptions = {
         cwd: repoRoot,
         env: { ...process.env, CLAUDECODE: '' },
         windowsHide: true,
-        shell: false,
+        shell: useShell,
         stdio: ['pipe', 'pipe', 'pipe'],
       };
 
