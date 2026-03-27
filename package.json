@@ -1,6 +1,6 @@
 {
   "name": "claude-chat-app",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Conversational AI Chat App - Beautiful markdown rendering for Claude",
   "main": "main.js",
   "scripts": {
