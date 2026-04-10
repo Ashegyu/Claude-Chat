@@ -873,9 +873,11 @@
       { command: '/subagent', get description() { return t('cmd.subagent.desc'); }, get usage() { return t('cmd.subagent.usage'); } },
       { command: '/auto-agent', get description() { return t('cmd.autoAgent.desc'); }, get usage() { return t('cmd.autoAgent.usage'); } },
       { command: '/agents', get description() { return t('cmd.agents.desc'); }, usage: '/agents' },
+      { command: '/reload-commands', description: '커맨드 목록 새로고침 (.claude/commands/)', usage: '/reload-commands' },
     ];
   }
-  const SLASH_COMMANDS = buildSlashCommands();
+  let SLASH_COMMANDS = buildSlashCommands();
+  let _dynamicCommands = []; // 동적으로 로드된 커맨드 (커스텀 + CLI 발견)
   // 기본 모델 목록 (드롭다운 빠른 선택용) + 커스텀 입력 지원
   const MODEL_OPTIONS = [
     { id: 'opus', cliModel: 'opus' },
@@ -2935,6 +2937,20 @@
     return true;
   }
 
+  async function discoverDynamicCommands(cwd) {
+    try {
+      const [customResult, cliResult] = await Promise.allSettled([
+        window.electronAPI.claude.listCustomCommands(cwd),
+        window.electronAPI.claude.discoverCliCommands(),
+      ]);
+      const custom = customResult.status === 'fulfilled' ? (customResult.value?.data ?? []) : [];
+      const cli = cliResult.status === 'fulfilled' ? (cliResult.value?.data ?? []) : [];
+      const staticNames = new Set(buildSlashCommands().map(c => c.command));
+      _dynamicCommands = [...custom, ...cli].filter(c => !staticNames.has(c.command));
+      SLASH_COMMANDS = [...buildSlashCommands(), ..._dynamicCommands];
+    } catch { /* 실패해도 정적 커맨드는 유지 */ }
+  }
+
   function filterSlashCommands(token) {
     const normalized = String(token || '').toLowerCase();
     if (!normalized || normalized === '/') return SLASH_COMMANDS.slice();
@@ -3424,6 +3440,22 @@
       } else {
         showAgentPicker(cleanArg);
       }
+      return true;
+    }
+
+    if (command === '/reload-commands') {
+      await discoverDynamicCommands(currentCwd);
+      showSlashFeedback(`커맨드 목록 새로고침 완료 (동적 ${_dynamicCommands.length}개)`, false);
+      return true;
+    }
+
+    // 사용자 정의 파일 기반 커맨드 확인 (.claude/commands/*.md)
+    const customCmd = _dynamicCommands.find(c => c.command === command && c.body);
+    if (customCmd) {
+      const fullPrompt = argText
+        ? `${customCmd.body}\n\n${argText}`
+        : customCmd.body;
+      await sendMessage(fullPrompt);
       return true;
     }
 
@@ -3953,6 +3985,13 @@
   runInitStep('active-profile', () => setActiveProfile(activeProfileId));
   runInitStep('statusbar', () => updateClaudeStatusbar());
   runInitStep('rate-limits', () => refreshClaudeRateLimits('init'));
+  runInitStep('dynamic-commands', () => discoverDynamicCommands(currentCwd));
+
+  // 커맨드 파일 변경 감지 → 실시간 재로드
+  window.electronAPI.claude.onCommandsChanged(async () => {
+    await discoverDynamicCommands(currentCwd);
+    updateSlashCommandMenu();
+  });
 
   // 서브에이전트 자동닫기 버튼
   const $btnSubagentAutoClose = document.getElementById('btn-subagent-autoclose');

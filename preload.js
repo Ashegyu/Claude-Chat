@@ -65,6 +65,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     deleteSession: (arg) => ipcRenderer.invoke('codex:deleteSession', arg),
     getSessionDiffs: (arg) => ipcRenderer.invoke('codex:getSessionDiffs', arg),
     listAgents: (arg) => ipcRenderer.invoke('codex:listAgents', arg),
+    listCustomCommands: (cwd) => ipcRenderer.invoke('codex:listCustomCommands', { cwd }),
+    discoverCliCommands: (arg) => ipcRenderer.invoke('codex:discoverCliCommands', arg),
+    onCommandsChanged: (cb) => {
+      const handler = (_, data) => cb(data);
+      ipcRenderer.on('commands:changed', handler);
+      return () => ipcRenderer.removeListener('commands:changed', handler);
+    },
   },
   store: {
     loadConversations: () => ipcRenderer.invoke('store:loadConversations'),

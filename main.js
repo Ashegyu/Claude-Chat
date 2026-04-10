@@ -816,6 +816,7 @@ ipcMain.handle('cwd:get', () => workingDirectory);
 ipcMain.handle('cwd:set', (event, dir) => {
   if (fs.existsSync(dir)) {
     workingDirectory = dir;
+    refreshCommandWatchers(dir);
     return { success: true, cwd: dir };
   }
   return { success: false, error: 'Directory not found' };
@@ -1416,6 +1417,138 @@ ipcMain.handle('codex:listAgents', (event, arg) => {
   } catch (err) {
     return { success: false, error: err.message, data: [] };
   }
+});
+
+// --- 사용자 정의 커맨드: .claude/commands/*.md 파일 읽기 ---
+function parseFrontmatter(content) {
+  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!match) return { meta: {}, body: content.trim() };
+  const meta = {};
+  match[1].split(/\r?\n/).forEach(line => {
+    const kv = line.match(/^(\w+):\s*(.*)$/);
+    if (kv) meta[kv[1].trim()] = kv[2].trim();
+  });
+  return { meta, body: content.slice(match[0].length).trim() };
+}
+
+ipcMain.handle('codex:listCustomCommands', (event, arg) => {
+  try {
+    const rawCwd = typeof arg === 'string' ? arg : (typeof arg?.cwd === 'string' ? arg.cwd : '');
+    const projectCwd = rawCwd && rawCwd.trim() ? rawCwd.trim() : workingDirectory;
+    const projectDir = path.join(projectCwd, '.claude', 'commands');
+    const globalDir = path.join(os.homedir(), '.claude', 'commands');
+    const commands = [];
+    const seenNames = new Set();
+
+    for (const dir of [projectDir, globalDir]) {
+      if (!fs.existsSync(dir)) continue;
+      const files = fs.readdirSync(dir).filter(f => f.endsWith('.md'));
+      for (const file of files) {
+        try {
+          const content = fs.readFileSync(path.join(dir, file), 'utf8');
+          const cmdName = '/' + file.replace(/\.md$/i, '');
+          if (seenNames.has(cmdName)) continue;
+          seenNames.add(cmdName);
+          const { meta, body } = parseFrontmatter(content);
+          commands.push({
+            command: cmdName,
+            description: meta.description || '',
+            usage: meta.usage || cmdName,
+            body,
+            source: dir === projectDir ? 'project' : 'global',
+            fileName: file,
+          });
+        } catch { /* skip malformed files */ }
+      }
+    }
+    return { success: true, data: commands };
+  } catch (err) {
+    return { success: false, error: err.message, data: [] };
+  }
+});
+
+// --- CLI 슬래시 커맨드 자동 발견 (claude --help 파싱) ---
+let cachedCliCommands = null;
+ipcMain.handle('codex:discoverCliCommands', async (event, arg) => {
+  if (cachedCliCommands) return { success: true, data: cachedCliCommands };
+  try {
+    const profileCommand = (typeof arg?.command === 'string' && arg.command) ? arg.command : 'claude';
+    const resolved = resolveCliPath(profileCommand);
+    const result = await new Promise((resolve) => {
+      const child = spawn(resolved, ['--help'], {
+        cwd: workingDirectory,
+        env: { ...process.env },
+        windowsHide: true,
+        shell: process.platform === 'win32' && resolved.endsWith('.cmd'),
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: 8000,
+      });
+      let out = '';
+      child.stdout?.on('data', d => { out += d.toString('utf8'); });
+      child.stderr?.on('data', d => { out += d.toString('utf8'); });
+      child.on('close', () => resolve(out));
+      child.on('error', () => resolve(''));
+    });
+
+    // 슬래시 커맨드 라인 파싱: "  /command   description" 패턴
+    const commands = [];
+    const seen = new Set();
+    const lines = result.split(/\r?\n/);
+    for (const line of lines) {
+      const m = line.match(/^\s{1,6}(\/[\w-]+)\s{2,}(.+)$/);
+      if (!m) continue;
+      const cmd = m[1].trim();
+      if (seen.has(cmd)) continue;
+      seen.add(cmd);
+      commands.push({ command: cmd, description: m[2].trim(), usage: cmd });
+    }
+    cachedCliCommands = commands;
+    return { success: true, data: commands };
+  } catch (err) {
+    return { success: false, error: err.message, data: [] };
+  }
+});
+
+// --- 커맨드 디렉토리 파일 감시 ---
+const _commandWatchers = new Map(); // dirPath → FSWatcher
+let _commandChangeDebounce = null;
+
+function notifyCommandsChanged() {
+  clearTimeout(_commandChangeDebounce);
+  _commandChangeDebounce = setTimeout(() => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('commands:changed');
+    }
+  }, 150);
+}
+
+function watchCommandsDir(dirPath) {
+  if (_commandWatchers.has(dirPath)) return;
+  if (!fs.existsSync(dirPath)) return;
+  try {
+    const watcher = fs.watch(dirPath, { persistent: false }, () => notifyCommandsChanged());
+    _commandWatchers.set(dirPath, watcher);
+  } catch { /* 감시 불가 폴더는 무시 */ }
+}
+
+function unwatchCommandsDir(dirPath) {
+  const w = _commandWatchers.get(dirPath);
+  if (w) { try { w.close(); } catch {} _commandWatchers.delete(dirPath); }
+}
+
+function refreshCommandWatchers(projectCwd) {
+  // 프로젝트 커맨드 디렉토리 교체 (순회 중 삭제를 피하기 위해 목록 먼저 수집)
+  const globalDir = path.join(os.homedir(), '.claude', 'commands');
+  const toUnwatch = [..._commandWatchers.keys()].filter(d => d !== globalDir);
+  for (const dirPath of toUnwatch) {
+    unwatchCommandsDir(dirPath);
+  }
+  if (projectCwd) watchCommandsDir(path.join(projectCwd, '.claude', 'commands'));
+}
+
+// 앱 시작 시 글로벌 커맨드 디렉토리 감시 시작
+app.whenReady().then(() => {
+  watchCommandsDir(path.join(os.homedir(), '.claude', 'commands'));
 });
 
 // --- Claude 세션 목록 (stub) ---
