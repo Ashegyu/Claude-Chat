@@ -53,6 +53,7 @@
   /* -- Layout ---------------------------- */
   --titlebar-h: 42px;
   --sidebar-w: clamp(304px, 27vw, 396px);
+  --stream-main-col-w: 1fr;
   --layout-gutter: clamp(24px, 4vw, 56px);
   --message-max: 860px;
   --bubble-max-user: min(75%, 680px);
@@ -3860,20 +3861,50 @@ button:focus:not(:focus-visible) { outline: none; }
 /* ─── Stream Grid Layout (main + subagents side-by-side) ─── */
 .stream-grid {
   display: grid;
-  grid-template-columns: 1fr 420px;
-  gap: 16px;
+  grid-template-columns: var(--stream-main-col-w) 6px minmax(260px, 420px);
+  gap: 0;
   min-height: 0;
 }
 @media (max-width: 900px) {
   .stream-grid { grid-template-columns: 1fr; }
+  .stream-grid-resizer { display: none; }
 }
-.stream-main-col { min-width: 0; overflow: hidden; }
+.stream-main-col { min-width: 0; overflow: hidden; padding-right: 8px; }
 .stream-subagent-col {
   min-width: 0; max-height: 600px; overflow-y: auto;
   padding: 10px; border-left: 1px solid rgba(168, 85, 247, 0.2);
   scrollbar-width: thin; scrollbar-color: rgba(168, 85, 247, 0.2) transparent;
 }
 .final-grid .stream-subagent-col { max-height: none; }
+
+/* ─── Stream Grid Resizer Handle ─── */
+.stream-grid-resizer {
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  cursor: col-resize;
+  position: relative;
+  z-index: 1;
+  flex-shrink: 0;
+}
+.stream-grid-resizer::after {
+  content: '';
+  display: block;
+  width: 2px;
+  background: rgba(168, 85, 247, 0.2);
+  border-radius: 1px;
+  transition: background 150ms ease, width 150ms ease;
+  align-self: stretch;
+}
+.stream-grid-resizer:hover::after,
+.stream-grid-resizer:active::after {
+  width: 3px;
+  background: rgba(168, 85, 247, 0.6);
+}
+body.stream-grid-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
 
 /* Subagent side panel items (final render) */
 .subagent-side-header {

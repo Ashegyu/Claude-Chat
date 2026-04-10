@@ -806,6 +806,13 @@
   let sidebarCollapsed = false;
   let sidebarResizeSession = null;
 
+  const STREAM_GRID_PREF_KEY = 'streamGridMainColPx';
+  const STREAM_GRID_MIN_MAIN = 320;
+  const STREAM_GRID_MIN_SUB = 260;
+  const STREAM_GRID_RESIZER_PX = 6;
+  let streamGridMainColPx = null;
+  let streamGridResizeSession = null;
+
   // === DOM ===
   const $messages = document.getElementById('messages');
   const $sidebar = document.getElementById('sidebar');
@@ -3594,6 +3601,115 @@
     }
   }
 
+  // ─── Stream Grid Resizer ───────────────────────────────────────
+
+  function clampStreamGridMain(px, containerWidth) {
+    const raw = Number(px);
+    if (!Number.isFinite(raw)) return null;
+    const maxMain = containerWidth - STREAM_GRID_MIN_SUB - STREAM_GRID_RESIZER_PX;
+    return Math.max(STREAM_GRID_MIN_MAIN, Math.min(maxMain, Math.round(raw)));
+  }
+
+  function applyStreamGridWidth() {
+    if (Number.isFinite(streamGridMainColPx) && streamGridMainColPx > 0) {
+      document.documentElement.style.setProperty('--stream-main-col-w', `${streamGridMainColPx}px`);
+    } else {
+      document.documentElement.style.removeProperty('--stream-main-col-w');
+    }
+  }
+
+  function saveStreamGridPrefs() {
+    if (Number.isFinite(streamGridMainColPx) && streamGridMainColPx > 0) {
+      localStorage.setItem(STREAM_GRID_PREF_KEY, String(streamGridMainColPx));
+    } else {
+      localStorage.removeItem(STREAM_GRID_PREF_KEY);
+    }
+  }
+
+  function loadStreamGridPrefs() {
+    const raw = localStorage.getItem(STREAM_GRID_PREF_KEY);
+    if (raw == null) { streamGridMainColPx = null; return; }
+    const parsed = Number(raw);
+    streamGridMainColPx = Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  }
+
+  function beginStreamGridResize(e) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const resizerEl = e.target.closest('.stream-grid-resizer');
+    if (!resizerEl) return;
+    const gridEl = resizerEl.closest('.stream-grid');
+    if (!gridEl) return;
+    const mainCol = gridEl.querySelector('.stream-main-col');
+    if (!mainCol) return;
+    streamGridResizeSession = {
+      startX: e.clientX,
+      startMainWidth: mainCol.getBoundingClientRect().width,
+      containerWidth: gridEl.clientWidth,
+    };
+    document.body.classList.add('stream-grid-resizing');
+    document.addEventListener('mousemove', onStreamGridResizeMove);
+    document.addEventListener('mouseup', endStreamGridResize);
+  }
+
+  function onStreamGridResizeMove(e) {
+    if (!streamGridResizeSession) return;
+    const delta = e.clientX - streamGridResizeSession.startX;
+    const nextPx = clampStreamGridMain(
+      streamGridResizeSession.startMainWidth + delta,
+      streamGridResizeSession.containerWidth
+    );
+    if (Number.isFinite(nextPx)) {
+      streamGridMainColPx = nextPx;
+      applyStreamGridWidth();
+    }
+  }
+
+  function endStreamGridResize() {
+    if (!streamGridResizeSession) return;
+    streamGridResizeSession = null;
+    document.body.classList.remove('stream-grid-resizing');
+    document.removeEventListener('mousemove', onStreamGridResizeMove);
+    document.removeEventListener('mouseup', endStreamGridResize);
+    saveStreamGridPrefs();
+  }
+
+  function initStreamGridResizer() {
+    loadStreamGridPrefs();
+    applyStreamGridWidth();
+
+    if ($messages) {
+      $messages.addEventListener('mousedown', (e) => {
+        if (e.target.closest('.stream-grid-resizer')) {
+          beginStreamGridResize(e);
+        }
+      });
+      $messages.addEventListener('dblclick', (e) => {
+        if (e.target.closest('.stream-grid-resizer')) {
+          streamGridMainColPx = null;
+          applyStreamGridWidth();
+          saveStreamGridPrefs();
+        }
+      });
+    }
+
+    window.addEventListener('resize', () => {
+      if (!Number.isFinite(streamGridMainColPx)) return;
+      const gridEl = document.querySelector('.stream-grid');
+      if (!gridEl) return;
+      const clamped = clampStreamGridMain(streamGridMainColPx, gridEl.clientWidth);
+      if (!Number.isFinite(clamped)) return;
+      if (clamped !== streamGridMainColPx) {
+        streamGridMainColPx = clamped;
+        applyStreamGridWidth();
+        saveStreamGridPrefs();
+      }
+    });
+  }
+
+  // ──────────────────────────────────────────────────────────────
+
   function runInitStep(name, fn) {
     try {
       const out = typeof fn === 'function' ? fn() : null;
@@ -3978,6 +4094,7 @@
 
   // === 초기화 ===
   runInitStep('sidebar-layout', () => initSidebarLayout());
+  runInitStep('stream-grid-resizer', () => initStreamGridResizer());
   runInitStep('sidebar-meta', () => initSidebarMeta());
   runInitStep('cwd', () => initCwd());
   runInitStep('profiles', () => renderProfiles());
@@ -8017,7 +8134,7 @@ Response format (JSON array only):
       // 그리드 레이아웃: 좌=본 에이전트, 우=서브에이전트
       let grid = containerEl.querySelector('.stream-grid');
       if (!grid) {
-        containerEl.innerHTML = '<div class="stream-grid"><div class="stream-main-col"></div><div class="stream-subagent-col"></div></div>';
+        containerEl.innerHTML = '<div class="stream-grid"><div class="stream-main-col"></div><div class="stream-grid-resizer" role="separator" aria-orientation="vertical" aria-label="답변 패널 크기 조절"></div><div class="stream-subagent-col"></div></div>';
         grid = containerEl.querySelector('.stream-grid');
       }
       const mainCol = grid.querySelector('.stream-main-col');
@@ -9611,7 +9728,7 @@ Response format (JSON array only):
 
     // 서브에이전트가 있으면 그리드 레이아웃
     if (subagentSideHtml) {
-      html = `<div class="stream-grid final-grid"><div class="stream-main-col">${html}</div><div class="stream-subagent-col">${subagentSideHtml}</div></div>`;
+      html = `<div class="stream-grid final-grid"><div class="stream-main-col">${html}</div><div class="stream-grid-resizer" role="separator" aria-orientation="vertical" aria-label="답변 패널 크기 조절"></div><div class="stream-subagent-col">${subagentSideHtml}</div></div>`;
     }
 
     setCachedRender(cacheKey, html);
