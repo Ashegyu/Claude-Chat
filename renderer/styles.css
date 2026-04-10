@@ -3861,7 +3861,7 @@ button:focus:not(:focus-visible) { outline: none; }
 /* ─── Stream Grid Layout (main + subagents side-by-side) ─── */
 .stream-grid {
   display: grid;
-  grid-template-columns: var(--stream-main-col-w) 6px minmax(260px, 420px);
+  grid-template-columns: var(--stream-main-col-w) 6px 1fr;
   gap: 0;
   min-height: 0;
 }
